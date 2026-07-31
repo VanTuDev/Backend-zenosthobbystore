@@ -1,0 +1,45 @@
+{
+  "name": "zenosthobbystore-backend",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Backend API for ZENOS Hobby Store — Google OAuth login + admin CRUD, backed by MongoDB Atlas.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "seed": "tsx src/seed.ts",
+    "seed:catalog": "tsx scripts/seed-demo-catalog.ts",
+    "import:vn-locations": "tsx scripts/import-vn-locations.ts",
+    "smoke": "tsx scripts/smoke-test.ts",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "cloudinary": "^2.10.0",
+    "compression": "^1.7.5",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.5",
+    "morgan": "^1.10.0",
+    "multer": "^2.2.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.7.5",
+    "@types/cookie-parser": "^1.4.8",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/morgan": "^1.9.9",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.10.5",
+    "mongodb-memory-server": "^10.1.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

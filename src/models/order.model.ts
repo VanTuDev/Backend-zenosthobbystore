@@ -1,0 +1,86 @@
+import { Schema, model, Types } from "mongoose";
+import { applyJsonTransform } from "./plugin";
+
+export type OrderStatus = "pending" | "processing" | "shipped" | "delivered" | "cancelled";
+export type PaymentMethod = "Chuyển khoản" | "COD" | "Thẻ tín dụng" | "Ví điện tử";
+export type PaymentStatus = "paid" | "unpaid" | "refunded";
+
+export interface OrderItemDoc {
+  productId?: Types.ObjectId | null;
+  slug: string;
+  name: string;
+  image: string;
+  price: number;
+  quantity: number;
+}
+
+export interface OrderDoc {
+  customerName: string;
+  customerEmail: string;
+  phone: string;
+  provinceCode: string;
+  provinceName: string;
+  wardCode: string;
+  wardName: string;
+  addressDetail: string;
+  /** Server-derived display line: `${addressDetail}, ${wardName}, ${provinceName}` — never trusted from the client. */
+  shippingAddress: string;
+  items: OrderItemDoc[];
+  subtotal: number;
+  shippingFee: number;
+  tax?: number | null;
+  discount: number;
+  total: number;
+  status: OrderStatus;
+  paymentMethod: PaymentMethod;
+  paymentStatus: PaymentStatus;
+  placedAt: Date;
+  userId: Types.ObjectId | null;
+}
+
+const orderItemSchema = new Schema<OrderItemDoc>(
+  {
+    productId: { type: Schema.Types.ObjectId, ref: "Product", default: null },
+    slug: { type: String, default: "" },
+    name: { type: String, required: true },
+    image: { type: String, default: "" },
+    price: { type: Number, required: true, min: 0 },
+    quantity: { type: Number, required: true, min: 1 },
+  },
+  { _id: false },
+);
+
+const orderSchema = new Schema<OrderDoc>({
+  customerName: { type: String, required: true },
+  customerEmail: { type: String, required: true, lowercase: true, trim: true },
+  phone: { type: String, required: true },
+  provinceCode: { type: String, required: true },
+  provinceName: { type: String, required: true },
+  wardCode: { type: String, required: true },
+  wardName: { type: String, required: true },
+  addressDetail: { type: String, required: true },
+  shippingAddress: { type: String, required: true },
+  items: { type: [orderItemSchema], required: true, validate: (v: unknown[]) => v.length > 0 },
+  subtotal: { type: Number, required: true, min: 0 },
+  shippingFee: { type: Number, default: 0, min: 0 },
+  tax: { type: Number, default: null },
+  discount: { type: Number, default: 0, min: 0 },
+  total: { type: Number, required: true, min: 0 },
+  status: {
+    type: String,
+    enum: ["pending", "processing", "shipped", "delivered", "cancelled"],
+    default: "pending",
+  },
+  paymentMethod: {
+    type: String,
+    enum: ["Chuyển khoản", "COD", "Thẻ tín dụng", "Ví điện tử"],
+    required: true,
+  },
+  paymentStatus: { type: String, enum: ["paid", "unpaid", "refunded"], default: "unpaid" },
+  placedAt: { type: Date, default: Date.now },
+  userId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+});
+
+applyJsonTransform(orderSchema);
+
+export const Order = model<OrderDoc>("Order", orderSchema);
