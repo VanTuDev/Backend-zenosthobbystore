@@ -4,15 +4,11 @@ import { attachUser, requireAdmin, requireAuth } from "../middleware/auth";
 import { requireDb } from "../middleware/require-db";
 import { FinanceTransaction } from "../models/finance-transaction.model";
 import { Order } from "../models/order.model";
+import { Promotion } from "../models/promotion.model";
 import { ApiError } from "../utils/api-error";
 import { asyncHandler } from "../utils/async-handler";
+import { financeStatusFor } from "../utils/finance-status";
 import { getPagination, paginatedResponse } from "../utils/pagination";
-
-function financeStatusFor(paymentStatus: "paid" | "unpaid" | "refunded") {
-  if (paymentStatus === "paid") return "completed";
-  if (paymentStatus === "refunded") return "failed";
-  return "pending";
-}
 
 export const ordersRouter = Router();
 ordersRouter.use(requireDb);
@@ -38,7 +34,7 @@ const orderSchema = z.object({
   items: z.array(orderItemSchema).min(1),
   shippingFee: z.number().int().nonnegative().default(0),
   tax: z.number().int().nonnegative().optional(),
-  discount: z.number().int().nonnegative().default(0),
+  promotionCode: z.string().trim().min(1).optional(),
   paymentMethod: z.enum(["Chuyển khoản", "COD", "Thẻ tín dụng", "Ví điện tử"]),
   paymentStatus: z.enum(["paid", "unpaid", "refunded"]).default("unpaid"),
 });
@@ -64,7 +60,34 @@ ordersRouter.post(
     const body = orderSchema.parse(req.body);
 
     const subtotal = body.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const total = subtotal + body.shippingFee + (body.tax ?? 0) - body.discount;
+
+    // Discount is never trusted from the client — only a real, currently-valid Promotion
+    // code can produce one, computed here from the server-recomputed subtotal.
+    let discount = 0;
+    let promotion: InstanceType<typeof Promotion> | null = null;
+    if (body.promotionCode) {
+      const code = body.promotionCode.toUpperCase();
+      promotion = await Promotion.findOne({ code });
+      if (!promotion) throw ApiError.badRequest("Mã khuyến mãi không tồn tại.");
+
+      const now = new Date();
+      const isValid =
+        promotion.status === "active" &&
+        now >= promotion.startDate &&
+        now <= promotion.endDate &&
+        (promotion.usageLimit === 0 || promotion.usageCount < promotion.usageLimit);
+      if (!isValid) throw ApiError.badRequest("Mã khuyến mãi không hợp lệ hoặc đã hết hạn.");
+      if (promotion.type === "bundle") {
+        throw ApiError.badRequest("Khuyến mãi tặng kèm chưa được hỗ trợ khi đặt hàng, vui lòng liên hệ CSKH.");
+      }
+
+      discount =
+        promotion.type === "percentage"
+          ? Math.round(subtotal * (promotion.value / 100))
+          : Math.min(subtotal, promotion.value);
+    }
+
+    const total = subtotal + body.shippingFee + (body.tax ?? 0) - discount;
     if (total < 0) throw ApiError.badRequest("Tổng đơn hàng không hợp lệ.");
 
     // Strip a trailing comma the customer may have typed in addressDetail — otherwise it
@@ -86,12 +109,18 @@ ordersRouter.post(
       subtotal,
       shippingFee: body.shippingFee,
       tax: body.tax,
-      discount: body.discount,
+      discount,
       total,
       paymentMethod: body.paymentMethod,
       paymentStatus: body.paymentStatus,
       userId: req.user!.sub,
+      promotionCode: promotion?.code ?? null,
+      promotionId: promotion?.id ?? null,
     });
+
+    if (promotion) {
+      await Promotion.updateOne({ _id: promotion.id }, { $inc: { usageCount: 1 } });
+    }
 
     await FinanceTransaction.create({
       orderId: order.id,

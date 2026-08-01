@@ -108,9 +108,15 @@ async function main() {
       wardCode: "25747",
       wardName: "Phường Thủ Dầu Một",
       addressDetail: "123 Test St",
-      items: [{ name: product.json.product.name, price: product.json.product.price, quantity: 2 }],
+      items: [
+        {
+          productId: product.json.product.id,
+          name: product.json.product.name,
+          price: product.json.product.price,
+          quantity: 2,
+        },
+      ],
       shippingFee: 30000,
-      discount: 0,
       paymentMethod: "COD",
       paymentStatus: "paid",
     },
@@ -119,14 +125,149 @@ async function main() {
   const expectedTotal = product.json.product.price * 2 + 30000;
   check("order total computed server-side", order.status === 201 && order.json.order.total === expectedTotal);
 
+  console.log("Orders + promo code (server-computed discount)");
+  const promoForOrder = await call("POST", "/promotions", {
+    body: {
+      name: "Order promo",
+      code: "orderpromo",
+      type: "percentage",
+      value: 10,
+      startDate: new Date().toISOString(),
+      endDate: new Date(Date.now() + 86400000).toISOString(),
+      status: "active",
+      usageLimit: 5,
+    },
+    cookie: adminCookie,
+  });
+  const orderWithPromo = await call("POST", "/orders", {
+    body: {
+      customerName: "Shopper",
+      customerEmail: "shopper@example.com",
+      phone: "0900000000",
+      provinceCode: "79",
+      provinceName: "Thành phố Hồ Chí Minh",
+      wardCode: "25747",
+      wardName: "Phường Thủ Dầu Một",
+      addressDetail: "123 Test St",
+      items: [
+        {
+          productId: product.json.product.id,
+          name: product.json.product.name,
+          price: product.json.product.price,
+          quantity: 1,
+        },
+      ],
+      shippingFee: 0,
+      promotionCode: "orderpromo",
+      paymentMethod: "COD",
+      paymentStatus: "unpaid",
+    },
+    cookie: customerCookie,
+  });
+  const expectedDiscount = Math.round(product.json.product.price * 0.1);
+  check(
+    "order applies server-computed discount from a valid promo code",
+    orderWithPromo.status === 201 &&
+      orderWithPromo.json.order.discount === expectedDiscount &&
+      orderWithPromo.json.order.promotionCode === "ORDERPROMO",
+  );
+  const promoAfterOrder = await call("GET", `/promotions/${promoForOrder.json.promotion.id}`, { cookie: adminCookie });
+  check("promo usageCount incremented after order", promoAfterOrder.json.promotion.usageCount === 1);
+
+  const orderWithBadPromo = await call("POST", "/orders", {
+    body: {
+      customerName: "Shopper",
+      customerEmail: "shopper@example.com",
+      phone: "0900000000",
+      provinceCode: "79",
+      provinceName: "Thành phố Hồ Chí Minh",
+      wardCode: "25747",
+      wardName: "Phường Thủ Dầu Một",
+      addressDetail: "123 Test St",
+      items: [
+        {
+          productId: product.json.product.id,
+          name: product.json.product.name,
+          price: product.json.product.price,
+          quantity: 1,
+        },
+      ],
+      shippingFee: 0,
+      promotionCode: "NOPE-NOT-REAL",
+      paymentMethod: "COD",
+      paymentStatus: "unpaid",
+    },
+    cookie: customerCookie,
+  });
+  check("order rejects an unknown promo code (400)", orderWithBadPromo.status === 400);
+
+  console.log("PayOS payment simulation");
+  const payosOrder = await call("POST", "/orders", {
+    body: {
+      customerName: "Shopper",
+      customerEmail: "shopper@example.com",
+      phone: "0900000000",
+      provinceCode: "79",
+      provinceName: "Thành phố Hồ Chí Minh",
+      wardCode: "25747",
+      wardName: "Phường Thủ Dầu Một",
+      addressDetail: "123 Test St",
+      items: [
+        {
+          productId: product.json.product.id,
+          name: product.json.product.name,
+          price: product.json.product.price,
+          quantity: 1,
+        },
+      ],
+      shippingFee: 0,
+      paymentMethod: "Ví điện tử",
+      paymentStatus: "unpaid",
+    },
+    cookie: customerCookie,
+  });
+  const payosCreate = await call("POST", `/payments/payos/${payosOrder.json.order.id}`, { cookie: customerCookie });
+  check("payos create returns a paymentRef", payosCreate.status === 201 && typeof payosCreate.json.paymentRef === "string");
+  const payosConfirm = await call("POST", `/payments/payos/${payosOrder.json.order.id}/confirm`, { cookie: customerCookie });
+  check("payos confirm marks the order paid", payosConfirm.status === 200 && payosConfirm.json.order.paymentStatus === "paid");
+
+  console.log("Reviews (purchase-gated, one per customer per product)");
+  const reviewFromNonBuyer = await call("POST", "/reviews", {
+    body: { productId: product.json.product.id, rating: 5, comment: "Never bought this." },
+    cookie: adminCookie,
+  });
+  check("non-purchaser cannot review (403)", reviewFromNonBuyer.status === 403);
+
+  const review = await call("POST", "/reviews", {
+    body: { productId: product.json.product.id, rating: 4, comment: "Chi tiết đẹp, đóng gói cẩn thận." },
+    cookie: customerCookie,
+  });
+  check("purchaser can review (201)", review.status === 201);
+
+  const productAfterReview = await call("GET", `/products/${product.json.product.slug}`);
+  check(
+    "product rating/reviewCount recomputed from real review",
+    productAfterReview.json.product.rating === 4 && productAfterReview.json.product.reviewCount === 1,
+  );
+
+  const duplicateReview = await call("POST", "/reviews", {
+    body: { productId: product.json.product.id, rating: 3, comment: "Trying again." },
+    cookie: customerCookie,
+  });
+  check("duplicate review from same customer rejected (409)", duplicateReview.status === 409);
+
+  const reviewsList = await call("GET", `/reviews?productId=${product.json.product.id}`);
+  check("public review list reachable", reviewsList.status === 200 && reviewsList.json.items.length === 1);
+
+  // 3 orders exist for this customer by now: order, orderWithPromo, payosOrder (orderWithBadPromo was rejected, never created).
   const myOrderList = await call("GET", "/orders", { cookie: customerCookie });
   check(
     "customer lists only their own orders",
-    myOrderList.status === 200 && myOrderList.json.items.length === 1 && myOrderList.json.items[0].id === order.json.order.id,
+    myOrderList.status === 200 && myOrderList.json.items.length === 3,
   );
 
   const orderList = await call("GET", "/orders", { cookie: adminCookie });
-  check("admin can list orders", orderList.status === 200 && orderList.json.items.length === 1);
+  check("admin can list orders", orderList.status === 200 && orderList.json.items.length === 3);
 
   const statusUpdate = await call("PATCH", `/orders/${order.json.order.id}/status`, {
     body: { status: "shipped" },

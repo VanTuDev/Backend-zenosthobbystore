@@ -7,6 +7,7 @@ import { Folder } from "./models/folder.model";
 import { Order } from "./models/order.model";
 import { Product } from "./models/product.model";
 import { Promotion } from "./models/promotion.model";
+import { Review } from "./models/review.model";
 import { User } from "./models/user.model";
 
 /**
@@ -25,6 +26,7 @@ async function main() {
   await Promise.all([
     FinanceTransaction.deleteMany({}),
     Order.deleteMany({}),
+    Review.deleteMany({}),
     Product.deleteMany({}),
     Category.deleteMany({}),
     Folder.deleteMany({}),
@@ -36,6 +38,7 @@ async function main() {
   // --- Users ---
   const admin = await User.create({ email: "admin@zenoshobbystore.vn", name: "ZENOS Admin", role: "ADMIN" });
   const shopper = await User.create({ email: "minhanh.collector@gmail.com", name: "Minh Anh Nguyễn", role: "CUSTOMER" });
+  const shopper2 = await User.create({ email: "long.tran@example.com", name: "Trần Bảo Long", role: "CUSTOMER" });
 
   // --- Folders ---
   const animeFolder = await Folder.create({ name: "Anime", slug: "anime" });
@@ -67,8 +70,8 @@ async function main() {
       stockStatus: "in_stock",
       stockCount: 12,
       badges: ["best_seller"],
-      rating: 4.8,
-      reviewCount: 56,
+      rating: 4.5,
+      reviewCount: 2,
       description: "Mô hình Raiden Shogun tỉ lệ 1/7, chi tiết sơn tay cao cấp.",
       highlights: ["Chi tiết sơn tay", "Đế trưng bày kèm hiệu ứng"],
       specs: [{ label: "Chất liệu", value: "PVC & ABS" }],
@@ -84,8 +87,8 @@ async function main() {
       stockStatus: "in_stock",
       stockCount: 40,
       badges: ["new_arrival"],
-      rating: 4.6,
-      reviewCount: 88,
+      rating: 5,
+      reviewCount: 1,
       description: "Real Grade Nu Gundam tỉ lệ 1/144, khung nội bộ chi tiết.",
       highlights: ["Khung nội bộ Real Grade", "Decal nước đi kèm"],
       specs: [{ label: "Chất liệu", value: "PS & ABS" }],
@@ -165,6 +168,65 @@ async function main() {
     method: order.paymentMethod,
     status: "completed",
   });
+
+  // --- A second order (different customer, both products) so reviews have more than one purchaser to draw from ---
+  const order2 = await Order.create({
+    customerName: "Trần Bảo Long",
+    customerEmail: "long.tran@example.com",
+    phone: "0912345678",
+    provinceCode: "79",
+    provinceName: "Thành phố Hồ Chí Minh",
+    wardCode: "25747",
+    wardName: "Phường Thủ Dầu Một",
+    addressDetail: "45 Trần Hưng Đạo",
+    shippingAddress: "45 Trần Hưng Đạo, Phường Thủ Dầu Một, Thành phố Hồ Chí Minh",
+    items: [
+      { productId: products[0]._id, slug: products[0].slug, name: products[0].name, price: products[0].price, quantity: 1 },
+      { productId: products[1]._id, slug: products[1].slug, name: products[1].name, price: products[1].price, quantity: 1 },
+    ],
+    subtotal: products[0].price + products[1].price,
+    shippingFee: 0,
+    discount: 0,
+    total: products[0].price + products[1].price,
+    status: "delivered",
+    paymentMethod: "Ví điện tử",
+    paymentStatus: "paid",
+    userId: shopper2._id,
+  });
+
+  await FinanceTransaction.create({
+    orderId: order2._id,
+    customer: order2.customerName,
+    amount: order2.total,
+    type: "revenue",
+    method: order2.paymentMethod,
+    status: "completed",
+  });
+
+  // --- Reviews (only from customers who actually "bought" the product, matching the reviews API's rule) ---
+  await Review.insertMany([
+    {
+      productId: products[0]._id,
+      userId: shopper._id,
+      customerName: shopper.name,
+      rating: 5,
+      comment: "Chi tiết sơn tay cực đẹp, đóng gói chắc chắn. Rất đáng tiền!",
+    },
+    {
+      productId: products[0]._id,
+      userId: shopper2._id,
+      customerName: shopper2.name,
+      rating: 4,
+      comment: "Tượng đẹp, giao hàng nhanh. Trừ 1 sao vì hộp ngoài hơi móp góc.",
+    },
+    {
+      productId: products[1]._id,
+      userId: shopper2._id,
+      customerName: shopper2.name,
+      rating: 5,
+      comment: "Khung Real Grade chi tiết, lắp ráp mượt, đúng như mô tả.",
+    },
+  ]);
 
   console.log("Seed complete.");
   console.log(`Admin login (dev bypass): POST /auth/dev-login { "email": "${admin.email}" }`);

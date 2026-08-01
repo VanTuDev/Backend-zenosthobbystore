@@ -36,6 +36,11 @@ export interface OrderDoc {
   paymentStatus: PaymentStatus;
   placedAt: Date;
   userId: Types.ObjectId | null;
+  promotionCode?: string | null;
+  promotionId?: Types.ObjectId | null;
+  paymentProvider?: "payos" | null;
+  paymentRef?: string | null;
+  paidAt?: Date | null;
 }
 
 const orderItemSchema = new Schema<OrderItemDoc>(
@@ -79,6 +84,11 @@ const orderSchema = new Schema<OrderDoc>({
   paymentStatus: { type: String, enum: ["paid", "unpaid", "refunded"], default: "unpaid" },
   placedAt: { type: Date, default: Date.now },
   userId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+  promotionCode: { type: String, default: null },
+  promotionId: { type: Schema.Types.ObjectId, ref: "Promotion", default: null },
+  paymentProvider: { type: String, enum: ["payos", null], default: null },
+  paymentRef: { type: String, default: null },
+  paidAt: { type: Date, default: null },
 });
 
 applyJsonTransform(orderSchema);
