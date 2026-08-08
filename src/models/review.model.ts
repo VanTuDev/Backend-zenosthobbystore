@@ -7,6 +7,7 @@ export interface ReviewDoc {
   customerName: string;
   rating: number;
   comment: string;
+  images: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -18,6 +19,7 @@ const reviewSchema = new Schema<ReviewDoc>(
     customerName: { type: String, required: true },
     rating: { type: Number, required: true, min: 1, max: 5 },
     comment: { type: String, required: true },
+    images: { type: [String], default: [] },
   },
   { timestamps: true },
 );

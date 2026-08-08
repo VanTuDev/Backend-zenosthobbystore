@@ -8,6 +8,15 @@ export interface ProductSpec {
   value: string;
 }
 
+export type ProductVideoProvider = "tiktok" | "youtube";
+
+export interface ProductVideo {
+  url: string;
+  /** Fetched via the provider's oEmbed API when the admin adds the link — see POST /products/resolve-video. */
+  thumbnail: string;
+  provider: ProductVideoProvider;
+}
+
 export interface ProductDoc {
   name: string;
   slug: string;
@@ -30,12 +39,23 @@ export interface ProductDoc {
   specs: ProductSpec[];
   images: string[]; // no upload pipeline yet — plain URL strings
   heroImage: string;
+  /** TikTok/YouTube clips for the product gallery's video row — link-out only, never embedded/hosted. */
+  videos: ProductVideo[];
   categoryId: Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const specSchema = new Schema<ProductSpec>({ label: String, value: String }, { _id: false });
+
+const videoSchema = new Schema<ProductVideo>(
+  {
+    url: { type: String, required: true },
+    thumbnail: { type: String, default: "" },
+    provider: { type: String, enum: ["tiktok", "youtube"], required: true },
+  },
+  { _id: false },
+);
 
 const productSchema = new Schema<ProductDoc>(
   {
@@ -64,6 +84,7 @@ const productSchema = new Schema<ProductDoc>(
     specs: { type: [specSchema], default: [] },
     images: { type: [String], default: [] },
     heroImage: { type: String, default: "" },
+    videos: { type: [videoSchema], default: [] },
     categoryId: { type: Schema.Types.ObjectId, ref: "Category", default: null },
   },
   { timestamps: true },

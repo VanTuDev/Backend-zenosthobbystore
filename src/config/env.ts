@@ -37,10 +37,17 @@ if (!parsed.success) {
 
 const raw = parsed.data;
 
+// Supports a single origin or a comma-separated list (e.g. the apex domain + the Vercel preview
+// domain both serving the same frontend) — the cors package's string form only ever matches one.
+const corsOrigins = raw.CORS_ORIGIN.split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 export const env = {
   nodeEnv: raw.NODE_ENV,
   port: raw.PORT,
   corsOrigin: raw.CORS_ORIGIN,
+  corsOrigins,
 
   mongodbUri: raw.MONGODB_URI,
 

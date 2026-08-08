@@ -29,6 +29,12 @@ const SORT_OPTIONS: Record<string, Record<string, 1 | -1>> = {
 
 const specSchema = z.object({ label: z.string(), value: z.string() });
 
+const productVideoSchema = z.object({
+  url: z.string().url(),
+  thumbnail: z.string().default(""),
+  provider: z.enum(["tiktok", "youtube"]),
+});
+
 const productSchema = z.object({
   name: z.string().min(1),
   slug: z.string().min(1).optional(),
@@ -51,8 +57,28 @@ const productSchema = z.object({
   specs: z.array(specSchema).default([]),
   images: z.array(z.string()).default([]),
   heroImage: z.string().default(""),
+  videos: z.array(productVideoSchema).default([]),
   categoryId: z.string().nullable().optional(),
 });
+
+const resolveVideoSchema = z.object({ url: z.string().url() });
+
+function detectVideoProvider(url: string): "tiktok" | "youtube" | null {
+  let host: string;
+  try {
+    host = new URL(url).hostname.replace(/^www\./, "").replace(/^m\./, "");
+  } catch {
+    return null;
+  }
+  if (host.endsWith("tiktok.com")) return "tiktok";
+  if (host === "youtube.com" || host === "youtu.be") return "youtube";
+  return null;
+}
+
+const OEMBED_URL: Record<"tiktok" | "youtube", (url: string) => string> = {
+  tiktok: (url) => `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`,
+  youtube: (url) => `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+};
 
 productsRouter.get(
   "/",
@@ -115,6 +141,34 @@ productsRouter.get(
       brands: brandRows.map((r) => ({ value: r._id, count: r.count })),
       scales: scaleRows.map((r) => ({ value: r._id, count: r.count })),
     });
+  }),
+);
+
+/**
+ * Admin pastes a TikTok/YouTube link when adding a gallery video; this resolves the provider's
+ * oEmbed cover image server-side (avoids CORS/API-key issues doing it from the browser) so the
+ * admin sees the real thumbnail immediately instead of a blank tile.
+ */
+productsRouter.post(
+  "/resolve-video",
+  attachUser,
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { url } = resolveVideoSchema.parse(req.body);
+    const provider = detectVideoProvider(url);
+    if (!provider) throw ApiError.badRequest("Chỉ hỗ trợ link TikTok hoặc YouTube.");
+
+    let thumbnail = "";
+    try {
+      const oembedRes = await fetch(OEMBED_URL[provider](url));
+      if (!oembedRes.ok) throw new Error(`oEmbed responded ${oembedRes.status}`);
+      const data = (await oembedRes.json()) as { thumbnail_url?: string };
+      thumbnail = data.thumbnail_url ?? "";
+    } catch {
+      throw ApiError.badRequest("Không lấy được thông tin từ link này — kiểm tra lại đường dẫn.");
+    }
+
+    res.json({ provider, thumbnail });
   }),
 );
 

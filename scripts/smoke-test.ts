@@ -239,10 +239,16 @@ async function main() {
   check("non-purchaser cannot review (403)", reviewFromNonBuyer.status === 403);
 
   const review = await call("POST", "/reviews", {
-    body: { productId: product.json.product.id, rating: 4, comment: "Chi tiết đẹp, đóng gói cẩn thận." },
+    body: {
+      productId: product.json.product.id,
+      rating: 4,
+      comment: "Chi tiết đẹp, đóng gói cẩn thận.",
+      images: ["https://res.cloudinary.com/demo/image/upload/sample.jpg"],
+    },
     cookie: customerCookie,
   });
   check("purchaser can review (201)", review.status === 201);
+  check("review stores attached image URLs", review.json?.review?.images?.length === 1);
 
   const productAfterReview = await call("GET", `/products/${product.json.product.slug}`);
   check(
@@ -257,7 +263,13 @@ async function main() {
   check("duplicate review from same customer rejected (409)", duplicateReview.status === 409);
 
   const reviewsList = await call("GET", `/reviews?productId=${product.json.product.id}`);
-  check("public review list reachable", reviewsList.status === 200 && reviewsList.json.items.length === 1);
+  check(
+    "public review list includes a real summary (not the stale Product fields)",
+    reviewsList.status === 200 &&
+      reviewsList.json.items.length === 1 &&
+      reviewsList.json.summary.averageRating === 4 &&
+      reviewsList.json.summary.count === 1,
+  );
 
   // 3 orders exist for this customer by now: order, orderWithPromo, payosOrder (orderWithBadPromo was rejected, never created).
   const myOrderList = await call("GET", "/orders", { cookie: customerCookie });
@@ -325,6 +337,32 @@ async function main() {
     cookie: adminCookie,
   });
   check("duplicate email rejected with 409", dupe.status === 409);
+
+  console.log("Contact tickets (public support form)");
+  const ticket = await call("POST", "/contact-tickets", {
+    body: {
+      subject: "product",
+      customerName: "Guest Visitor",
+      customerEmail: "guest@example.com",
+      message: "Sản phẩm này còn hàng không?",
+    },
+  });
+  check("ticket submitted without login (201)", ticket.status === 201 && ticket.json.ticket.status === "open");
+
+  const ticketForbidden = await call("GET", "/contact-tickets", { cookie: customerCookie });
+  check("non-admin cannot list tickets (403)", ticketForbidden.status === 403);
+
+  const ticketList = await call("GET", "/contact-tickets", { cookie: adminCookie });
+  check("admin can list tickets", ticketList.status === 200 && ticketList.json.items.length === 1);
+
+  const ticketStatusUpdate = await call("PATCH", `/contact-tickets/${ticket.json.ticket.id}/status`, {
+    body: { status: "resolved" },
+    cookie: adminCookie,
+  });
+  check(
+    "admin can resolve a ticket",
+    ticketStatusUpdate.status === 200 && ticketStatusUpdate.json.ticket.status === "resolved",
+  );
 
   console.log("Cleanup");
   const del = await call("DELETE", `/products/${product.json.product.id}`, { cookie: adminCookie });

@@ -18,21 +18,32 @@ const createReviewSchema = z.object({
   productId: z.string().min(1),
   rating: z.number().int().min(1).max(5),
   comment: z.string().trim().min(1),
+  images: z.array(z.string()).max(4).default([]),
 });
 
-/** Recomputes Product.rating/reviewCount from real Review documents after a create/delete. */
-async function recomputeProductRating(productId: string) {
+/** The real, ground-truth rating aggregate for a product — computed from Review documents, never from the denormalized Product fields (which can predate the review system / drift). */
+async function computeRatingAggregate(productId: string) {
   const [agg] = await Review.aggregate<{ avgRating: number; count: number }>([
     { $match: { productId: new Types.ObjectId(productId) } },
     { $group: { _id: null, avgRating: { $avg: "$rating" }, count: { $sum: 1 } } },
   ]);
-  await Product.findByIdAndUpdate(productId, {
-    rating: agg ? Math.round(agg.avgRating * 10) / 10 : 0,
-    reviewCount: agg?.count ?? 0,
-  });
+  return {
+    averageRating: agg ? Math.round(agg.avgRating * 10) / 10 : 0,
+    count: agg?.count ?? 0,
+  };
 }
 
-/** Public — the product detail page reads reviews without needing a session. */
+/** Recomputes Product.rating/reviewCount from real Review documents after a create/delete. */
+async function recomputeProductRating(productId: string) {
+  const { averageRating, count } = await computeRatingAggregate(productId);
+  await Product.findByIdAndUpdate(productId, { rating: averageRating, reviewCount: count });
+}
+
+/**
+ * Public — the product detail page reads reviews without needing a session. Includes a
+ * `summary` (real average/count over ALL of the product's reviews, not just this page) so
+ * the frontend never has to fall back to the possibly-stale `Product.rating`/`reviewCount`.
+ */
 reviewsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
@@ -40,12 +51,13 @@ reviewsRouter.get(
     if (!productId) throw ApiError.badRequest("Thiếu productId.");
     const pagination = getPagination(req);
 
-    const [reviews, total] = await Promise.all([
+    const [reviews, total, summary] = await Promise.all([
       Review.find({ productId }).sort({ createdAt: -1 }).skip(pagination.skip).limit(pagination.pageSize),
       Review.countDocuments({ productId }),
+      computeRatingAggregate(productId),
     ]);
 
-    res.json(paginatedResponse(reviews, total, pagination));
+    res.json({ ...paginatedResponse(reviews, total, pagination), summary });
   }),
 );
 
@@ -79,6 +91,7 @@ reviewsRouter.post(
       customerName: user.name,
       rating: body.rating,
       comment: body.comment,
+      images: body.images,
     });
 
     await recomputeProductRating(body.productId);
