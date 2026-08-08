@@ -17,6 +17,15 @@ export interface ProductVideo {
   provider: ProductVideoProvider;
 }
 
+export interface ProductVariant {
+  /** e.g. "Đỏ - Size M" — free-text, no separate color/size axes. */
+  name: string;
+  price: number;
+  stockCount: number;
+  /** Own Cloudinary URL — shown in the gallery's main viewer when this variant is selected. */
+  image: string;
+}
+
 export interface ProductDoc {
   name: string;
   slug: string;
@@ -41,6 +50,8 @@ export interface ProductDoc {
   heroImage: string;
   /** TikTok/YouTube clips for the product gallery's video row — link-out only, never embedded/hosted. */
   videos: ProductVideo[];
+  /** Up to 100 — each carries its own price/stock, independent of the product's own price/stockCount. */
+  variants: ProductVariant[];
   categoryId: Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
@@ -53,6 +64,16 @@ const videoSchema = new Schema<ProductVideo>(
     url: { type: String, required: true },
     thumbnail: { type: String, default: "" },
     provider: { type: String, enum: ["tiktok", "youtube"], required: true },
+  },
+  { _id: false },
+);
+
+const variantSchema = new Schema<ProductVariant>(
+  {
+    name: { type: String, required: true },
+    price: { type: Number, required: true, min: 0 },
+    stockCount: { type: Number, default: 0, min: 0 },
+    image: { type: String, default: "" },
   },
   { _id: false },
 );
@@ -85,6 +106,14 @@ const productSchema = new Schema<ProductDoc>(
     images: { type: [String], default: [] },
     heroImage: { type: String, default: "" },
     videos: { type: [videoSchema], default: [] },
+    variants: {
+      type: [variantSchema],
+      default: [],
+      validate: {
+        validator: (v: unknown[]) => v.length <= 100,
+        message: "Tối đa 100 biến thể mỗi sản phẩm.",
+      },
+    },
     categoryId: { type: Schema.Types.ObjectId, ref: "Category", default: null },
   },
   { timestamps: true },

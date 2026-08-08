@@ -35,6 +35,13 @@ const productVideoSchema = z.object({
   provider: z.enum(["tiktok", "youtube"]),
 });
 
+const productVariantSchema = z.object({
+  name: z.string().min(1),
+  price: z.number().int().nonnegative(),
+  stockCount: z.number().int().nonnegative().default(0),
+  image: z.string().default(""),
+});
+
 const productSchema = z.object({
   name: z.string().min(1),
   slug: z.string().min(1).optional(),
@@ -58,6 +65,7 @@ const productSchema = z.object({
   images: z.array(z.string()).default([]),
   heroImage: z.string().default(""),
   videos: z.array(productVideoSchema).default([]),
+  variants: z.array(productVariantSchema).max(100, "Tối đa 100 biến thể mỗi sản phẩm.").default([]),
   categoryId: z.string().nullable().optional(),
 });
 

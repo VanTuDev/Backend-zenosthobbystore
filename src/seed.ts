@@ -7,7 +7,6 @@ import { Folder } from "./models/folder.model";
 import { Order } from "./models/order.model";
 import { Product } from "./models/product.model";
 import { Promotion } from "./models/promotion.model";
-import { Review } from "./models/review.model";
 import { User } from "./models/user.model";
 
 /**
@@ -26,7 +25,6 @@ async function main() {
   await Promise.all([
     FinanceTransaction.deleteMany({}),
     Order.deleteMany({}),
-    Review.deleteMany({}),
     Product.deleteMany({}),
     Category.deleteMany({}),
     Folder.deleteMany({}),
@@ -169,7 +167,7 @@ async function main() {
     status: "completed",
   });
 
-  // --- A second order (different customer, both products) so reviews have more than one purchaser to draw from ---
+  // --- A second order (different customer, both products) ---
   const order2 = await Order.create({
     customerName: "Trần Bảo Long",
     customerEmail: "long.tran@example.com",
@@ -202,31 +200,6 @@ async function main() {
     method: order2.paymentMethod,
     status: "completed",
   });
-
-  // --- Reviews (only from customers who actually "bought" the product, matching the reviews API's rule) ---
-  await Review.insertMany([
-    {
-      productId: products[0]._id,
-      userId: shopper._id,
-      customerName: shopper.name,
-      rating: 5,
-      comment: "Chi tiết sơn tay cực đẹp, đóng gói chắc chắn. Rất đáng tiền!",
-    },
-    {
-      productId: products[0]._id,
-      userId: shopper2._id,
-      customerName: shopper2.name,
-      rating: 4,
-      comment: "Tượng đẹp, giao hàng nhanh. Trừ 1 sao vì hộp ngoài hơi móp góc.",
-    },
-    {
-      productId: products[1]._id,
-      userId: shopper2._id,
-      customerName: shopper2.name,
-      rating: 5,
-      comment: "Khung Real Grade chi tiết, lắp ráp mượt, đúng như mô tả.",
-    },
-  ]);
 
   console.log("Seed complete.");
   console.log(`Admin login (dev bypass): POST /auth/dev-login { "email": "${admin.email}" }`);

@@ -112,7 +112,7 @@ already set up for `http://localhost:3000` with `credentials: true`.
 | Orders | `POST /orders` (any signed-in user), `GET /orders` 🔒, `GET /orders/:id` 🔒, `PATCH /orders/:id/status` 🔒, `DELETE /orders/:id` 🔒 |
 | Promotions | `GET /promotions/code/:code` (public), `GET /promotions` 🔒, `GET /promotions/:id` 🔒, `POST /promotions` 🔒, `PUT /promotions/:id` 🔒, `DELETE /promotions/:id` 🔒 |
 | Finance | `GET /finance/transactions` 🔒, `GET /finance/summary` 🔒, `POST /finance/transactions` 🔒, `DELETE /finance/transactions/:id` 🔒 |
-| Uploads | `POST /uploads/image` 🔒 (multipart field `file`, ≤5MB, image only), `POST /uploads/review-image` (any signed-in user), `POST /uploads/contact-image` (public, rate-limited), `DELETE /uploads/image/:publicId` 🔒 |
+| Uploads | `POST /uploads/image` 🔒 (multipart field `file`, ≤5MB, image only), `POST /uploads/contact-image` (public, rate-limited), `DELETE /uploads/image/:publicId` 🔒 |
 
 🔒 = requires `ADMIN` session (cookie or `Authorization: Bearer <token>`).
 
@@ -134,6 +134,9 @@ accept `?page=&pageSize=` (default `pageSize=20`, capped at 100) and respond
   three returns `503`, same pattern as the DB guard.
 - Mongo/Mongoose errors (duplicate key, cast, validation) are translated into clean `400`/`409`
   JSON responses by the global error handler instead of leaking raw driver errors.
+- **Product variants** (`Product.variants`, up to 100 per product) each carry their own `price` and
+  `stockCount`, independent of the product's own `price`/`stockCount` — those stay the "base"
+  values used for catalog sort/filter/cards; variants only affect the detail page's picker.
 
 ## Scripts
 

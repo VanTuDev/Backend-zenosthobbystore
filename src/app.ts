@@ -19,7 +19,6 @@ import { ordersRouter } from "./routes/orders.routes";
 import { paymentsRouter } from "./routes/payments.routes";
 import { productsRouter } from "./routes/products.routes";
 import { promotionsRouter } from "./routes/promotions.routes";
-import { reviewsRouter } from "./routes/reviews.routes";
 import { uploadsRouter } from "./routes/uploads.routes";
 import { usersRouter } from "./routes/users.routes";
 
@@ -71,7 +70,6 @@ export function createApp() {
   app.use("/promotions", promotionsRouter);
   app.use("/finance", financeRouter);
   app.use("/payments", paymentsRouter);
-  app.use("/reviews", reviewsRouter);
   app.use("/uploads", uploadsRouter);
   app.use("/users", usersRouter);
 

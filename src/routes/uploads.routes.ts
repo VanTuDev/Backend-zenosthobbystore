@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
-import { attachUser, requireAdmin, requireAuth } from "../middleware/auth";
+import { attachUser, requireAdmin } from "../middleware/auth";
 import { requireCloudinary } from "../middleware/require-cloudinary";
 import { deleteImage, uploadImageBuffer } from "../lib/cloudinary";
 import { ApiError } from "../utils/api-error";
@@ -33,20 +33,6 @@ uploadsRouter.post(
   asyncHandler(async (req, res) => {
     if (!req.file) throw ApiError.badRequest("Thiếu file ảnh (field 'file').");
     const result = await uploadImageBuffer(req.file.buffer);
-    res.status(201).json({ url: result.secure_url, publicId: result.public_id });
-  }),
-);
-
-/** Any signed-in customer: upload a photo to attach to a product review. Kept separate from the admin product-image route (different auth level, different Cloudinary folder). */
-uploadsRouter.post(
-  "/review-image",
-  attachUser,
-  requireAuth,
-  requireCloudinary,
-  upload.single("file"),
-  asyncHandler(async (req, res) => {
-    if (!req.file) throw ApiError.badRequest("Thiếu file ảnh (field 'file').");
-    const result = await uploadImageBuffer(req.file.buffer, "zenosthobbystore/reviews");
     res.status(201).json({ url: result.secure_url, publicId: result.public_id });
   }),
 );

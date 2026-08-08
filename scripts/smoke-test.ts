@@ -97,6 +97,30 @@ async function main() {
   const productBySlug = await call("GET", `/products/${product.json.product.slug}`);
   check("product fetched by slug", productBySlug.status === 200 && productBySlug.json.product.id === product.json.product.id);
 
+  console.log("Product variants (own price/stock, capped at 100)");
+  const productWithVariants = await call("PUT", `/products/${product.json.product.id}`, {
+    body: {
+      variants: [
+        { name: "Đỏ - Size M", price: 4590000, stockCount: 5 },
+        { name: "Xanh - Size L", price: 4790000, stockCount: 0 },
+      ],
+    },
+    cookie: adminCookie,
+  });
+  check(
+    "variants save with their own price/stock",
+    productWithVariants.status === 200 &&
+      productWithVariants.json.product.variants.length === 2 &&
+      productWithVariants.json.product.variants[0].price === 4590000 &&
+      productWithVariants.json.product.variants[1].stockCount === 0,
+  );
+
+  const tooManyVariants = await call("PUT", `/products/${product.json.product.id}`, {
+    body: { variants: Array.from({ length: 101 }, (_, i) => ({ name: `V${i}`, price: 1000, stockCount: 1 })) },
+    cookie: adminCookie,
+  });
+  check("more than 100 variants rejected (400)", tooManyVariants.status === 400);
+
   console.log("Orders (server recomputes totals)");
   const order = await call("POST", "/orders", {
     body: {
@@ -230,46 +254,6 @@ async function main() {
   check("payos create returns a paymentRef", payosCreate.status === 201 && typeof payosCreate.json.paymentRef === "string");
   const payosConfirm = await call("POST", `/payments/payos/${payosOrder.json.order.id}/confirm`, { cookie: customerCookie });
   check("payos confirm marks the order paid", payosConfirm.status === 200 && payosConfirm.json.order.paymentStatus === "paid");
-
-  console.log("Reviews (purchase-gated, one per customer per product)");
-  const reviewFromNonBuyer = await call("POST", "/reviews", {
-    body: { productId: product.json.product.id, rating: 5, comment: "Never bought this." },
-    cookie: adminCookie,
-  });
-  check("non-purchaser cannot review (403)", reviewFromNonBuyer.status === 403);
-
-  const review = await call("POST", "/reviews", {
-    body: {
-      productId: product.json.product.id,
-      rating: 4,
-      comment: "Chi tiết đẹp, đóng gói cẩn thận.",
-      images: ["https://res.cloudinary.com/demo/image/upload/sample.jpg"],
-    },
-    cookie: customerCookie,
-  });
-  check("purchaser can review (201)", review.status === 201);
-  check("review stores attached image URLs", review.json?.review?.images?.length === 1);
-
-  const productAfterReview = await call("GET", `/products/${product.json.product.slug}`);
-  check(
-    "product rating/reviewCount recomputed from real review",
-    productAfterReview.json.product.rating === 4 && productAfterReview.json.product.reviewCount === 1,
-  );
-
-  const duplicateReview = await call("POST", "/reviews", {
-    body: { productId: product.json.product.id, rating: 3, comment: "Trying again." },
-    cookie: customerCookie,
-  });
-  check("duplicate review from same customer rejected (409)", duplicateReview.status === 409);
-
-  const reviewsList = await call("GET", `/reviews?productId=${product.json.product.id}`);
-  check(
-    "public review list includes a real summary (not the stale Product fields)",
-    reviewsList.status === 200 &&
-      reviewsList.json.items.length === 1 &&
-      reviewsList.json.summary.averageRating === 4 &&
-      reviewsList.json.summary.count === 1,
-  );
 
   // 3 orders exist for this customer by now: order, orderWithPromo, payosOrder (orderWithBadPromo was rejected, never created).
   const myOrderList = await call("GET", "/orders", { cookie: customerCookie });
