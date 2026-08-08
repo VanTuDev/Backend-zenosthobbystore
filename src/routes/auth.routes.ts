@@ -17,7 +17,13 @@ const isProd = env.nodeEnv === "production";
 
 const cookieOptions = {
   httpOnly: true,
-  sameSite: "lax" as const,
+  // Frontend (zenosthobbystore.com) and backend (onrender.com) are different registrable
+  // domains, so every axios call from the browser is cross-site — SameSite=Lax cookies get SET
+  // fine during the OAuth redirect (a top-level navigation) but are never SENT back on the
+  // follow-up XHR (e.g. GET /auth/me), which is why login "succeeds" yet the session 401s right
+  // after. SameSite=None is required for cross-site XHR, and the spec mandates Secure with it —
+  // both only kick in for isProd; local dev keeps Lax since localhost:3000/4000 are same-site.
+  sameSite: isProd ? ("none" as const) : ("lax" as const),
   secure: isProd,
   path: "/",
 };
