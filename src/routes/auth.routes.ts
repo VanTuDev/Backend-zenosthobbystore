@@ -130,8 +130,13 @@ authRouter.get(
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
 
-      issueSessionCookie(res, user);
-      res.redirect(env.frontendLoginSuccessUrl);
+      const token = issueSessionCookie(res, user);
+      // Belt-and-suspenders alongside the cookie: browsers increasingly block cross-site cookies
+      // outright (frontend/backend are different registrable domains here) regardless of a
+      // correct SameSite=None;Secure — a URL *fragment* (never sent to any server, unlike a query
+      // param) lets the frontend grab the session token client-side and send it back as
+      // `Authorization: Bearer` on every request instead, which cookie policies don't touch.
+      res.redirect(`${env.frontendLoginSuccessUrl}#token=${encodeURIComponent(token)}`);
     } catch (err) {
       console.error("Google OAuth callback failed:", err);
       res.redirect(env.frontendLoginFailureUrl);
@@ -163,8 +168,8 @@ authRouter.post(
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
 
-    issueSessionCookie(res, user);
-    res.json({ user: toPublicUser(user) });
+    const token = issueSessionCookie(res, user);
+    res.json({ user: toPublicUser(user), token });
   }),
 );
 
