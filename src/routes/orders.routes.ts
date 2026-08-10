@@ -1,10 +1,11 @@
+import { randomInt } from "node:crypto";
 import { Router } from "express";
+import { Types } from "mongoose";
 import { z } from "zod";
 import { attachUser, requireAdmin, requireAuth } from "../middleware/auth";
 import { requireDb } from "../middleware/require-db";
 import { FinanceTransaction } from "../models/finance-transaction.model";
-import { Order } from "../models/order.model";
-import { Promotion } from "../models/promotion.model";
+import { Order, type OrderItemDoc, type OrderStatus, type OrderType } from "../models/order.model";
 import { ApiError } from "../utils/api-error";
 import { asyncHandler } from "../utils/async-handler";
 import { financeStatusFor } from "../utils/finance-status";
@@ -13,155 +14,231 @@ import { getPagination, paginatedResponse } from "../utils/pagination";
 export const ordersRouter = Router();
 ordersRouter.use(requireDb);
 
+const ALL_STATUSES = [
+  "packing",
+  "deposit_received",
+  "factory_ordered",
+  "factory_shipped",
+  "transit_warehouse",
+  "vietnam_warehouse",
+  "shop_warehouse",
+  "shipped",
+  "pending",
+  "processing",
+  "delivered",
+  "cancelled",
+] as const;
+
+const STATUS_BY_TYPE: Record<OrderType, readonly OrderStatus[]> = {
+  in_stock: ["packing", "shipped"],
+  pre_order: [
+    "deposit_received",
+    "factory_ordered",
+    "factory_shipped",
+    "transit_warehouse",
+    "vietnam_warehouse",
+    "shop_warehouse",
+    "shipped",
+  ],
+};
+
 const orderItemSchema = z.object({
-  productId: z.string().optional(),
+  productId: z.string().nullable().optional().refine((value) => !value || Types.ObjectId.isValid(value), "Mã sản phẩm không hợp lệ."),
   slug: z.string().default(""),
   name: z.string().min(1),
+  variantName: z.string().trim().default(""),
   image: z.string().default(""),
   price: z.number().int().nonnegative(),
   quantity: z.number().int().positive(),
+  itemStatus: z.enum(ALL_STATUSES).optional(),
 });
 
-const orderSchema = z.object({
-  customerName: z.string().min(1),
-  customerEmail: z.string().email(),
-  phone: z.string().min(1),
-  provinceCode: z.string().min(1),
-  provinceName: z.string().min(1),
-  wardCode: z.string().min(1),
-  wardName: z.string().min(1),
-  addressDetail: z.string().min(1),
+const createManualOrderSchema = z.object({
+  orderType: z.enum(["in_stock", "pre_order"]),
+  facebookName: z.string().trim().min(1),
+  facebookUrl: z.string().trim().url(),
+  phone: z.string().trim().default(""),
+  addressDetail: z.string().trim().default(""),
   items: z.array(orderItemSchema).min(1),
-  shippingFee: z.number().int().nonnegative().default(0),
-  tax: z.number().int().nonnegative().optional(),
-  promotionCode: z.string().trim().min(1).optional(),
-  paymentMethod: z.enum(["Chuyển khoản", "COD", "Thẻ tín dụng", "Ví điện tử"]),
-  paymentStatus: z.enum(["paid", "unpaid", "refunded"]).default("unpaid"),
+  total: z.number().int().nonnegative().optional(),
+  depositAmount: z.number().int().nonnegative().default(0),
 });
 
 const statusSchema = z.object({
-  status: z.enum(["pending", "processing", "shipped", "delivered", "cancelled"]),
+  status: z.enum(ALL_STATUSES),
+  trackingCode: z.string().trim().max(100).optional(),
 });
 
 const paymentStatusSchema = z.object({
-  paymentStatus: z.enum(["paid", "unpaid", "refunded"]),
+  paymentStatus: z.enum(["not_deposited", "deposited", "paid"]),
 });
 
-/**
- * Any signed-in user can place an order (checkout flow). Totals are always
- * recomputed here from `items` rather than trusted from the client, so a
- * tampered request body can't under-charge or skew reported revenue.
- */
+const detailsSchema = z.object({
+  orderType: z.enum(["in_stock", "pre_order"]).optional(),
+  facebookName: z.string().trim().min(1).optional(),
+  facebookUrl: z.string().trim().url().optional(),
+  phone: z.string().trim().optional(),
+  addressDetail: z.string().trim().optional(),
+  total: z.number().int().nonnegative().optional(),
+  depositAmount: z.number().int().nonnegative().optional(),
+});
+
+const itemStatusSchema = z.object({ status: z.enum(ALL_STATUSES) });
+
+const splitOrderSchema = z.object({
+  selections: z.array(z.object({ itemIndex: z.number().int().nonnegative(), quantity: z.number().int().positive() })).min(1),
+  newTotal: z.number().int().nonnegative(),
+  newDepositAmount: z.number().int().nonnegative(),
+  originalTotal: z.number().int().nonnegative(),
+  originalDepositAmount: z.number().int().nonnegative(),
+});
+
+const PUBLIC_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+function randomPublicCode() {
+  return Array.from({ length: 6 }, () => PUBLIC_CODE_ALPHABET[randomInt(PUBLIC_CODE_ALPHABET.length)]).join("");
+}
+
+function paymentStatusForAmounts(depositAmount: number, total: number) {
+  if (total > 0 && depositAmount >= total) return "paid" as const;
+  if (depositAmount > 0) return "deposited" as const;
+  return "not_deposited" as const;
+}
+
+function normalizeLegacyPaymentStatus<T extends { paymentStatus: string; depositAmount?: number; total: number }>(order: T) {
+  if (order.paymentStatus === "unpaid") {
+    order.paymentStatus = paymentStatusForAmounts(order.depositAmount ?? 0, order.total);
+  }
+  return order;
+}
+
+function earliestItemStatus(order: { orderType?: OrderType; status: OrderStatus; items: Array<{ itemStatus?: OrderStatus }> }) {
+  const type = order.orderType ?? "in_stock";
+  const sequence = STATUS_BY_TYPE[type];
+  let earliestIndex = sequence.length - 1;
+  let found = false;
+  for (const item of order.items) {
+    const index = sequence.indexOf(item.itemStatus ?? order.status);
+    if (index >= 0) {
+      found = true;
+      earliestIndex = Math.min(earliestIndex, index);
+    }
+  }
+  return found ? sequence[earliestIndex] ?? order.status : order.status;
+}
+
+function copyOrderItem(item: OrderItemDoc) {
+  return {
+    productId: item.productId ?? null,
+    slug: item.slug,
+    name: item.name,
+    variantName: item.variantName,
+    image: item.image,
+    price: item.price,
+    quantity: item.quantity,
+    itemStatus: item.itemStatus,
+  };
+}
+
+async function createUniquePublicCode() {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const code = randomPublicCode();
+    if (!(await Order.exists({ publicCode: code }))) return code;
+  }
+  throw ApiError.conflict("Không thể tạo mã đơn hàng duy nhất, vui lòng thử lại.");
+}
+
+/** Admin-only manual order entry for Facebook/in-store orders. */
 ordersRouter.post(
   "/",
   attachUser,
-  requireAuth,
+  requireAdmin,
   asyncHandler(async (req, res) => {
-    const body = orderSchema.parse(req.body);
-
+    const body = createManualOrderSchema.parse(req.body);
     const subtotal = body.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-
-    // Discount is never trusted from the client — only a real, currently-valid Promotion
-    // code can produce one, computed here from the server-recomputed subtotal.
-    let discount = 0;
-    let promotion: InstanceType<typeof Promotion> | null = null;
-    if (body.promotionCode) {
-      const code = body.promotionCode.toUpperCase();
-      promotion = await Promotion.findOne({ code });
-      if (!promotion) throw ApiError.badRequest("Mã khuyến mãi không tồn tại.");
-
-      const now = new Date();
-      const isValid =
-        promotion.status === "active" &&
-        now >= promotion.startDate &&
-        now <= promotion.endDate &&
-        (promotion.usageLimit === 0 || promotion.usageCount < promotion.usageLimit);
-      if (!isValid) throw ApiError.badRequest("Mã khuyến mãi không hợp lệ hoặc đã hết hạn.");
-      if (promotion.type === "bundle") {
-        throw ApiError.badRequest("Khuyến mãi tặng kèm chưa được hỗ trợ khi đặt hàng, vui lòng liên hệ CSKH.");
-      }
-
-      discount =
-        promotion.type === "percentage"
-          ? Math.round(subtotal * (promotion.value / 100))
-          : Math.min(subtotal, promotion.value);
+    const total = body.total ?? subtotal;
+    if (body.depositAmount > total) {
+      throw ApiError.badRequest("Số tiền đặt cọc không được lớn hơn tổng tiền.");
     }
 
-    const total = subtotal + body.shippingFee + (body.tax ?? 0) - discount;
-    if (total < 0) throw ApiError.badRequest("Tổng đơn hàng không hợp lệ.");
-
-    // Strip a trailing comma the customer may have typed in addressDetail — otherwise it
-    // doubles up with the separator here (e.g. "123 Main St," + ", " -> "123 Main St,, ...").
-    const addressDetail = body.addressDetail.trim().replace(/[,\s]+$/, "");
-    const shippingAddress = `${addressDetail}, ${body.wardName}, ${body.provinceName}`;
+    const publicCode = await createUniquePublicCode();
+    const status: OrderStatus = body.orderType === "pre_order" ? "deposit_received" : "packing";
+    const paymentStatus = paymentStatusForAmounts(body.depositAmount, total);
 
     const order = await Order.create({
-      customerName: body.customerName,
-      customerEmail: body.customerEmail,
+      publicCode,
+      orderType: body.orderType,
+      facebookName: body.facebookName,
+      facebookUrl: body.facebookUrl,
+      customerName: body.facebookName,
+      customerEmail: "",
       phone: body.phone,
-      provinceCode: body.provinceCode,
-      provinceName: body.provinceName,
-      wardCode: body.wardCode,
-      wardName: body.wardName,
-      addressDetail,
-      shippingAddress,
-      items: body.items,
+      provinceCode: "",
+      provinceName: "",
+      wardCode: "",
+      wardName: "",
+      addressDetail: body.addressDetail,
+      shippingAddress: body.addressDetail,
+      items: body.items.map((item) => ({ ...item, itemStatus: status })),
       subtotal,
-      shippingFee: body.shippingFee,
-      tax: body.tax,
-      discount,
+      shippingFee: 0,
+      tax: null,
+      discount: 0,
       total,
-      paymentMethod: body.paymentMethod,
-      paymentStatus: body.paymentStatus,
+      depositAmount: body.depositAmount,
+      remainingAmount: total - body.depositAmount,
+      status,
+      statusMode: "auto",
+      trackingCode: "",
+      paymentMethod: "Chuyển khoản",
+      paymentStatus,
       userId: req.user!.sub,
-      promotionCode: promotion?.code ?? null,
-      promotionId: promotion?.id ?? null,
     });
-
-    if (promotion) {
-      await Promotion.updateOne({ _id: promotion.id }, { $inc: { usageCount: 1 } });
-    }
 
     await FinanceTransaction.create({
       orderId: order.id,
-      customer: order.customerName,
+      customer: order.facebookName,
       amount: order.total,
       type: "revenue",
-      method: order.paymentMethod,
-      status: financeStatusFor(order.paymentStatus),
+      method: "Facebook",
+      status: financeStatusFor(paymentStatus),
     });
 
     res.status(201).json({ order });
   }),
 );
 
-ordersRouter.use(attachUser);
-
-/**
- * A signed-in customer can fetch their own order (order-confirmation page,
- * order history); an admin can fetch any order. Changing status/payment-status
- * and deleting stay admin-only below.
- */
+/** Public, read-only view used by the share link. Sensitive contact details are omitted. */
 ordersRouter.get(
-  "/:id",
-  requireAuth,
+  "/public/:code",
   asyncHandler(async (req, res) => {
-    const order = await Order.findById(req.params.id);
+    const code = z.string().regex(/^[a-z0-9]{6}$/).parse(req.params.code.toLowerCase());
+    const order = await Order.findOne({ publicCode: code });
     if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
 
-    const isOwner = order.userId && String(order.userId) === req.user!.sub;
-    if (!isOwner && req.user!.role !== "ADMIN") {
-      throw ApiError.forbidden("Bạn không có quyền xem đơn hàng này.");
-    }
-
-    res.json({ order });
+    res.json({
+      order: {
+        publicCode: order.publicCode,
+        orderType: order.orderType,
+        facebookName: order.facebookName,
+        items: order.items,
+        subtotal: order.subtotal,
+        total: order.total,
+        depositAmount: order.depositAmount,
+        remainingAmount: order.remainingAmount,
+        status: order.status,
+        trackingCode: order.trackingCode,
+        placedAt: order.placedAt,
+        updatedAt: order.updatedAt,
+        sourceOrderCode: order.sourceOrderCode,
+        splitOrderCodes: order.splitOrderCodes,
+      },
+    });
   }),
 );
 
-/**
- * An admin gets every order (optionally filtered by status). A regular customer gets the
- * same endpoint but scoped to their own orders — this is what powers the "Đơn hàng của tôi" page.
- */
+ordersRouter.use(attachUser);
+
 ordersRouter.get(
   "/",
   requireAuth,
@@ -169,16 +246,171 @@ ordersRouter.get(
     const { status } = req.query as Record<string, string | string[] | undefined>;
     const pagination = getPagination(req);
     const statuses = Array.isArray(status) ? status : status ? [status] : [];
-    const statusFilter =
-      statuses.length === 0 ? {} : statuses.length === 1 ? { status: statuses[0] } : { status: { $in: statuses } };
+    const statusFilter = statuses.length === 0 ? {} : { status: { $in: statuses } };
     const filter = req.user!.role === "ADMIN" ? statusFilter : { ...statusFilter, userId: req.user!.sub };
-
     const [orders, total] = await Promise.all([
-      Order.find(filter).sort({ placedAt: -1 }).skip(pagination.skip).limit(pagination.pageSize),
+      Order.find(filter).sort({ placedAt: 1, _id: 1 }).skip(pagination.skip).limit(pagination.pageSize),
       Order.countDocuments(filter),
     ]);
+    res.json(paginatedResponse(orders.map(normalizeLegacyPaymentStatus), total, pagination));
+  }),
+);
 
-    res.json(paginatedResponse(orders, total, pagination));
+ordersRouter.get(
+  "/:id",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const order = await Order.findById(req.params.id);
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+    const isOwner = order.userId && String(order.userId) === req.user!.sub;
+    if (!isOwner && req.user!.role !== "ADMIN") throw ApiError.forbidden("Bạn không có quyền xem đơn hàng này.");
+    res.json({ order: normalizeLegacyPaymentStatus(order) });
+  }),
+);
+
+ordersRouter.patch(
+  "/:id/items/:itemIndex/status",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { status } = itemStatusSchema.parse(req.body);
+    const itemIndex = z.coerce.number().int().nonnegative().parse(req.params.itemIndex);
+    const order = await Order.findById(req.params.id);
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+    const item = order.items[itemIndex];
+    if (!item) throw ApiError.notFound("Không tìm thấy sản phẩm trong đơn hàng.");
+    const type = order.orderType ?? "in_stock";
+    if (!STATUS_BY_TYPE[type].includes(status)) throw ApiError.badRequest("Trạng thái không phù hợp với loại đơn hàng.");
+    item.itemStatus = status;
+    if ((order.statusMode ?? "auto") === "auto") order.status = earliestItemStatus(order);
+    order.markModified("items");
+    await order.save();
+    res.json({ order });
+  }),
+);
+
+ordersRouter.put(
+  "/:id/items",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { items } = z.object({ items: z.array(orderItemSchema).min(1).max(100) }).parse(req.body);
+    const order = await Order.findById(req.params.id);
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+    const allowedStatuses = STATUS_BY_TYPE[order.orderType ?? "in_stock"];
+    for (const item of items) {
+      if (item.itemStatus && !allowedStatuses.includes(item.itemStatus)) {
+        throw ApiError.badRequest(`Trạng thái của sản phẩm ${item.name} không phù hợp với loại đơn.`);
+      }
+    }
+    order.items = items.map((item) => ({
+      ...item,
+      productId: item.productId ? new Types.ObjectId(item.productId) : null,
+      itemStatus: item.itemStatus ?? order.status,
+    }));
+    order.subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    if ((order.statusMode ?? "auto") === "auto") order.status = earliestItemStatus(order);
+    await order.save();
+    res.json({ order });
+  }),
+);
+
+ordersRouter.post(
+  "/:id/split",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const body = splitOrderSchema.parse(req.body);
+    const order = await Order.findById(req.params.id);
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+    if (order.orderType !== "pre_order") throw ApiError.badRequest("Chỉ có thể tách sản phẩm từ đơn order.");
+    if (body.newDepositAmount > body.newTotal || body.originalDepositAmount > body.originalTotal) {
+      throw ApiError.badRequest("Tiền đặt cọc không được lớn hơn tổng tiền của từng đơn.");
+    }
+
+    const selectionMap = new Map<number, number>();
+    for (const selection of body.selections) {
+      if (selectionMap.has(selection.itemIndex)) throw ApiError.badRequest("Sản phẩm tách bị trùng lặp.");
+      const item = order.items[selection.itemIndex];
+      if (!item) throw ApiError.badRequest("Có sản phẩm không còn tồn tại trong đơn.");
+      if ((item.itemStatus ?? order.status) !== "shop_warehouse") {
+        throw ApiError.badRequest(`Sản phẩm ${item.name} chưa về kho shop.`);
+      }
+      if (selection.quantity > item.quantity) throw ApiError.badRequest(`Số lượng tách của ${item.name} không hợp lệ.`);
+      selectionMap.set(selection.itemIndex, selection.quantity);
+    }
+
+    const remainingItems = order.items.flatMap((item, index) => {
+      const selectedQuantity = selectionMap.get(index) ?? 0;
+      if (selectedQuantity === item.quantity) return [];
+      return [{ ...copyOrderItem(item), quantity: item.quantity - selectedQuantity }];
+    });
+    if (remainingItems.length === 0) throw ApiError.badRequest("Không thể tách toàn bộ sản phẩm. Hãy đổi loại đơn hiện tại sang hàng có sẵn.");
+
+    const splitItems = body.selections.map(({ itemIndex, quantity }) => {
+      const item = order.items[itemIndex];
+      return { ...copyOrderItem(item), quantity, itemStatus: "packing" as OrderStatus };
+    });
+    const newSubtotal = splitItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const originalSubtotal = remainingItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const publicCode = await createUniquePublicCode();
+    const newPaymentStatus = paymentStatusForAmounts(body.newDepositAmount, body.newTotal);
+    const originalPaymentStatus = paymentStatusForAmounts(body.originalDepositAmount, body.originalTotal);
+
+    const newOrder = await Order.create({
+      publicCode,
+      orderType: "in_stock",
+      facebookName: order.facebookName,
+      facebookUrl: order.facebookUrl,
+      customerName: order.customerName,
+      customerEmail: order.customerEmail,
+      phone: order.phone,
+      provinceCode: order.provinceCode,
+      provinceName: order.provinceName,
+      wardCode: order.wardCode,
+      wardName: order.wardName,
+      addressDetail: order.addressDetail,
+      shippingAddress: order.shippingAddress,
+      items: splitItems,
+      subtotal: newSubtotal,
+      shippingFee: 0,
+      tax: null,
+      discount: 0,
+      total: body.newTotal,
+      depositAmount: body.newDepositAmount,
+      remainingAmount: body.newTotal - body.newDepositAmount,
+      status: "packing",
+      statusMode: "auto",
+      trackingCode: "",
+      paymentMethod: order.paymentMethod,
+      paymentStatus: newPaymentStatus,
+      userId: order.userId,
+      sourceOrderCode: order.publicCode,
+    });
+
+    order.items = remainingItems;
+    order.subtotal = originalSubtotal;
+    order.total = body.originalTotal;
+    order.depositAmount = body.originalDepositAmount;
+    order.remainingAmount = body.originalTotal - body.originalDepositAmount;
+    order.paymentStatus = originalPaymentStatus;
+    order.splitOrderCodes = [...(order.splitOrderCodes ?? []), publicCode];
+    if ((order.statusMode ?? "auto") === "auto") order.status = earliestItemStatus(order);
+    await order.save();
+
+    await Promise.all([
+      FinanceTransaction.findOneAndUpdate(
+        { orderId: order.id },
+        { amount: order.total, status: financeStatusFor(originalPaymentStatus) },
+      ),
+      FinanceTransaction.create({
+        orderId: newOrder.id,
+        customer: newOrder.facebookName,
+        amount: newOrder.total,
+        type: "revenue",
+        method: "Facebook",
+        status: financeStatusFor(newPaymentStatus),
+      }),
+    ]);
+
+    res.status(201).json({ originalOrder: order, newOrder });
   }),
 );
 
@@ -186,9 +418,32 @@ ordersRouter.patch(
   "/:id/status",
   requireAdmin,
   asyncHandler(async (req, res) => {
-    const { status } = statusSchema.parse(req.body);
-    const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    const body = statusSchema.parse(req.body);
+    const order = await Order.findById(req.params.id);
     if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+
+    const type = order.orderType ?? "in_stock";
+    if (!STATUS_BY_TYPE[type].includes(body.status)) {
+      throw ApiError.badRequest("Trạng thái không phù hợp với loại đơn hàng.");
+    }
+    order.status = body.status;
+    order.statusMode = "manual";
+    if (body.status === "shipped") order.trackingCode = body.trackingCode ?? order.trackingCode;
+    await order.save();
+    res.json({ order });
+  }),
+);
+
+ordersRouter.patch(
+  "/:id/status/automatic",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const order = await Order.findById(req.params.id);
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+    order.statusMode = "auto";
+    order.status = earliestItemStatus(order);
+    if (order.status !== "shipped") order.trackingCode = "";
+    await order.save();
     res.json({ order });
   }),
 );
@@ -200,13 +455,51 @@ ordersRouter.patch(
     const { paymentStatus } = paymentStatusSchema.parse(req.body);
     const order = await Order.findByIdAndUpdate(req.params.id, { paymentStatus }, { new: true });
     if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+    await FinanceTransaction.findOneAndUpdate({ orderId: order.id }, { status: financeStatusFor(paymentStatus) });
+    res.json({ order });
+  }),
+);
 
-    // Keep the linked FinanceTransaction in sync so /finance/summary revenue stays correct.
+ordersRouter.patch(
+  "/:id/details",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const body = detailsSchema.parse(req.body);
+    const order = await Order.findById(req.params.id);
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+
+    const total = body.total ?? order.total;
+    const depositAmount = body.depositAmount ?? order.depositAmount ?? 0;
+    if (depositAmount > total) throw ApiError.badRequest("Số tiền đặt cọc không được lớn hơn tổng tiền.");
+
+    if (body.facebookName !== undefined) {
+      order.facebookName = body.facebookName;
+      order.customerName = body.facebookName;
+    }
+    if (body.orderType !== undefined && body.orderType !== order.orderType) {
+      order.orderType = body.orderType;
+      order.status = body.orderType === "pre_order" ? "deposit_received" : "packing";
+      order.statusMode = "auto";
+      order.items.forEach((item) => { item.itemStatus = order.status; });
+      order.markModified("items");
+      order.trackingCode = "";
+    }
+    if (body.facebookUrl !== undefined) order.facebookUrl = body.facebookUrl;
+    if (body.phone !== undefined) order.phone = body.phone;
+    if (body.addressDetail !== undefined) {
+      order.addressDetail = body.addressDetail;
+      order.shippingAddress = body.addressDetail;
+    }
+    order.total = total;
+    order.depositAmount = depositAmount;
+    order.remainingAmount = total - depositAmount;
+    order.paymentStatus = paymentStatusForAmounts(depositAmount, total);
+    await order.save();
+
     await FinanceTransaction.findOneAndUpdate(
       { orderId: order.id },
-      { status: financeStatusFor(paymentStatus) },
+      { amount: order.total, customer: order.facebookName, status: financeStatusFor(order.paymentStatus) },
     );
-
     res.json({ order });
   }),
 );
@@ -217,8 +510,10 @@ ordersRouter.delete(
   asyncHandler(async (req, res) => {
     const existing = await Order.findByIdAndDelete(req.params.id);
     if (!existing) throw ApiError.notFound("Không tìm thấy đơn hàng.");
-    // Otherwise the linked transaction survives as an orphan and keeps inflating /finance/summary forever.
-    await FinanceTransaction.deleteOne({ orderId: existing.id });
+    await Promise.all([
+      FinanceTransaction.deleteOne({ orderId: existing.id }),
+      Order.updateMany({ splitOrderCodes: existing.publicCode }, { $pull: { splitOrderCodes: existing.publicCode } }),
+    ]);
     res.status(204).end();
   }),
 );
