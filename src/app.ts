@@ -13,6 +13,7 @@ import { categoriesRouter } from "./routes/categories.routes";
 import { contactTicketsRouter } from "./routes/contact-tickets.routes";
 import { customersRouter } from "./routes/customers.routes";
 import { financeRouter } from "./routes/finance.routes";
+import { favoritesRouter } from "./routes/favorites.routes";
 import { foldersRouter } from "./routes/folders.routes";
 import { locationsRouter } from "./routes/locations.routes";
 import { ordersRouter } from "./routes/orders.routes";
@@ -69,6 +70,7 @@ export function createApp() {
   app.use("/orders", ordersRouter);
   app.use("/promotions", promotionsRouter);
   app.use("/finance", financeRouter);
+  app.use("/favorites", favoritesRouter);
   app.use("/payments", paymentsRouter);
   app.use("/uploads", uploadsRouter);
   app.use("/users", usersRouter);

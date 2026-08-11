@@ -43,6 +43,7 @@ export interface ProductDoc {
   badges: string[];
   rating: number;
   reviewCount: number;
+  favoriteCount: number;
   description: string;
   highlights: string[];
   specs: ProductSpec[];
@@ -50,7 +51,7 @@ export interface ProductDoc {
   heroImage: string;
   /** TikTok/YouTube clips for the product gallery's video row — link-out only, never embedded/hosted. */
   videos: ProductVideo[];
-  /** Up to 100 — each carries its own price/stock, independent of the product's own price/stockCount. */
+  /** 1–100 variants. Product price and stock are derived summaries of this array. */
   variants: ProductVariant[];
   categoryId: Types.ObjectId | null;
   createdAt: Date;
@@ -100,6 +101,7 @@ const productSchema = new Schema<ProductDoc>(
     badges: { type: [String], default: [] },
     rating: { type: Number, default: 0, min: 0, max: 5 },
     reviewCount: { type: Number, default: 0, min: 0 },
+    favoriteCount: { type: Number, default: 0, min: 0 },
     description: { type: String, default: "" },
     highlights: { type: [String], default: [] },
     specs: { type: [specSchema], default: [] },
@@ -110,8 +112,8 @@ const productSchema = new Schema<ProductDoc>(
       type: [variantSchema],
       default: [],
       validate: {
-        validator: (v: unknown[]) => v.length <= 100,
-        message: "Tối đa 100 biến thể mỗi sản phẩm.",
+        validator: (v: unknown[]) => v.length >= 1 && v.length <= 100,
+        message: "Mỗi sản phẩm phải có từ 1 đến 100 biến thể.",
       },
     },
     categoryId: { type: Schema.Types.ObjectId, ref: "Category", default: null },
