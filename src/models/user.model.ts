@@ -1,4 +1,4 @@
-import { Schema, model } from "mongoose";
+import { Schema, model, Types } from "mongoose";
 import { applyJsonTransform } from "./plugin";
 
 export type Role = "ADMIN" | "CUSTOMER";
@@ -9,6 +9,7 @@ export interface UserDoc {
   avatarUrl?: string | null;
   googleId?: string | null;
   role: Role;
+  favoriteProductIds: Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,6 +24,7 @@ const userSchema = new Schema<UserDoc>(
     // are truly absent, not ones set to null (which would collide).
     googleId: { type: String, unique: true, sparse: true },
     role: { type: String, enum: ["ADMIN", "CUSTOMER"], default: "CUSTOMER" },
+    favoriteProductIds: { type: [Schema.Types.ObjectId], ref: "Product", default: [] },
   },
   { timestamps: true },
 );

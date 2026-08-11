@@ -24,7 +24,7 @@ const SORT_OPTIONS: Record<string, Record<string, 1 | -1>> = {
   "moi-nhap": { createdAt: -1, _id: -1 },
   "gia-thap-cao": { price: 1, _id: -1 },
   "gia-cao-thap": { price: -1, _id: -1 },
-  "pho-bien": { reviewCount: -1, _id: -1 },
+  "pho-bien": { favoriteCount: -1, _id: -1 },
 };
 
 const specSchema = z.object({ label: z.string(), value: z.string() });
@@ -37,7 +37,7 @@ const productVideoSchema = z.object({
 
 const productVariantSchema = z.object({
   name: z.string().min(1),
-  price: z.number().int().nonnegative(),
+  price: z.number().int().nonnegative().optional(),
   stockCount: z.number().int().nonnegative().default(0),
   image: z.string().default(""),
 });
@@ -48,7 +48,7 @@ const productSchema = z.object({
   brand: z.string().default(""),
   universe: z.string().default(""),
   scale: z.string().default(""),
-  price: z.number().int().nonnegative(),
+  price: z.number().int().positive("Giá biến thể phải lớn hơn 0."),
   compareAtPrice: z.number().int().nonnegative().nullable().optional(),
   sellingPrice: z.number().int().nonnegative().nullable().optional(),
   originalPrice: z.number().int().nonnegative().nullable().optional(),
@@ -59,15 +59,37 @@ const productSchema = z.object({
   badges: z.array(z.string()).default([]),
   rating: z.number().min(0).max(5).default(0),
   reviewCount: z.number().int().nonnegative().default(0),
+  favoriteCount: z.number().int().nonnegative().optional(),
   description: z.string().default(""),
   highlights: z.array(z.string()).default([]),
   specs: z.array(specSchema).default([]),
   images: z.array(z.string()).default([]),
   heroImage: z.string().default(""),
   videos: z.array(productVideoSchema).default([]),
-  variants: z.array(productVariantSchema).max(100, "Tối đa 100 biến thể mỗi sản phẩm.").default([]),
+  variants: z
+    .array(productVariantSchema)
+    .min(1, "Mỗi sản phẩm phải có ít nhất 1 biến thể.")
+    .max(100, "Tối đa 100 biến thể mỗi sản phẩm."),
   categoryId: z.string().nullable().optional(),
 });
+
+function deriveProductSummary(variants: z.infer<typeof productVariantSchema>[]) {
+  const price = Math.min(...variants.map((variant) => variant.price ?? 0));
+  const stockCount = variants.reduce((total, variant) => total + (variant.stockCount ?? 0), 0);
+
+  return {
+    price,
+    sellingPrice: price,
+    compareAtPrice: null,
+    originalPrice: null,
+    promoPrice: null,
+    costPrice: null,
+    stockCount,
+    stockStatus: variants.some((variant) => (variant.stockCount ?? 0) > 0)
+      ? ("in_stock" as const)
+      : ("sold_out" as const),
+  };
+}
 
 const resolveVideoSchema = z.object({ url: z.string().url() });
 
@@ -206,6 +228,7 @@ productsRouter.post(
 
     const product = await Product.create({
       ...body,
+      ...deriveProductSummary(body.variants),
       slug,
       heroImage: body.heroImage || body.images[0] || "",
     });
@@ -230,7 +253,7 @@ productsRouter.put(
       if (clash) throw ApiError.conflict(`Slug "${body.slug}" đã tồn tại.`);
     }
 
-    Object.assign(existing, body);
+    Object.assign(existing, body, body.variants ? deriveProductSummary(body.variants) : {});
     await existing.save();
 
     res.json({ product: existing });

@@ -244,11 +244,14 @@ ordersRouter.get(
   "/",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { status } = req.query as Record<string, string | string[] | undefined>;
+    const { status, q } = req.query as Record<string, string | string[] | undefined>;
     const pagination = getPagination(req);
     const statuses = Array.isArray(status) ? status : status ? [status] : [];
     const statusFilter = statuses.length === 0 ? {} : { status: { $in: statuses } };
-    const filter = req.user!.role === "ADMIN" ? statusFilter : { ...statusFilter, userId: req.user!.sub };
+    const searchText = typeof q === "string" ? q.trim() : "";
+    const escapedSearch = searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const searchFilter = searchText ? { $or: [{ facebookName: { $regex: escapedSearch, $options: "i" } }, { customerName: { $regex: escapedSearch, $options: "i" } }] } : {};
+    const filter = req.user!.role === "ADMIN" ? { ...statusFilter, ...searchFilter } : { ...statusFilter, ...searchFilter, userId: req.user!.sub };
     const [orders, total] = await Promise.all([
       Order.find(filter).sort({ placedAt: 1, _id: 1 }).skip(pagination.skip).limit(pagination.pageSize),
       Order.countDocuments(filter),
@@ -262,6 +265,7 @@ ordersRouter.get(
   requireAdmin,
   asyncHandler(async (_req, res) => {
     const [summary] = await Order.aggregate<{ totalAmount: number; depositAmount: number }>([
+      { $match: { status: { $ne: "shipped" } } },
       { $group: { _id: null, totalAmount: { $sum: "$total" }, depositAmount: { $sum: "$depositAmount" } } },
       { $project: { _id: 0, totalAmount: 1, depositAmount: 1 } },
     ]);
