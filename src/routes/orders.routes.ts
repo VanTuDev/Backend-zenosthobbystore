@@ -5,6 +5,7 @@ import { z } from "zod";
 import { attachUser, requireAdmin, requireAuth } from "../middleware/auth";
 import { requireDb } from "../middleware/require-db";
 import { FinanceTransaction } from "../models/finance-transaction.model";
+import { FactoryOrderQuantity } from "../models/factory-order-quantity.model";
 import { Order, type OrderItemDoc, type OrderStatus, type OrderType } from "../models/order.model";
 import { ApiError } from "../utils/api-error";
 import { asyncHandler } from "../utils/async-handler";
@@ -253,6 +254,101 @@ ordersRouter.get(
       Order.countDocuments(filter),
     ]);
     res.json(paginatedResponse(orders.map(normalizeLegacyPaymentStatus), total, pagination));
+  }),
+);
+
+ordersRouter.get(
+  "/summary",
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
+    const [summary] = await Order.aggregate<{ totalAmount: number; depositAmount: number }>([
+      { $group: { _id: null, totalAmount: { $sum: "$total" }, depositAmount: { $sum: "$depositAmount" } } },
+      { $project: { _id: 0, totalAmount: 1, depositAmount: 1 } },
+    ]);
+    const totalAmount = summary?.totalAmount ?? 0;
+    const depositAmount = summary?.depositAmount ?? 0;
+    res.json({ totalAmount, depositAmount, remainingAmount: Math.max(0, totalAmount - depositAmount) });
+  }),
+);
+
+ordersRouter.get(
+  "/ordered-products-summary",
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
+    const items = await Order.aggregate<{
+      productId: string | null;
+      slug: string;
+      name: string;
+      variantName: string;
+      image: string;
+      quantity: number;
+      orderCount: number;
+    }>([
+      { $match: { orderType: "pre_order", status: { $nin: ["shipped", "cancelled"] } } },
+      { $unwind: "$items" },
+      { $match: { "items.itemStatus": { $nin: ["shipped"] } } },
+      {
+        $group: {
+          _id: {
+            productKey: { $ifNull: ["$items.productId", "$items.slug"] },
+            variantName: { $ifNull: ["$items.variantName", ""] },
+          },
+          productId: { $first: "$items.productId" },
+          slug: { $first: "$items.slug" },
+          name: { $first: "$items.name" },
+          variantName: { $first: { $ifNull: ["$items.variantName", ""] } },
+          image: { $first: "$items.image" },
+          quantity: { $sum: "$items.quantity" },
+          orderCodes: { $addToSet: "$publicCode" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          productId: { $toString: "$productId" },
+          slug: 1,
+          name: 1,
+          variantName: 1,
+          image: 1,
+          quantity: 1,
+          orderCount: { $size: "$orderCodes" },
+        },
+      },
+      { $sort: { name: 1, variantName: 1 } },
+    ]);
+    const savedQuantities = items.length > 0
+      ? await FactoryOrderQuantity.find({
+          $or: items.map((item) => ({ productKey: item.productId || item.slug, variantName: item.variantName })),
+        }).lean()
+      : [];
+    const quantityMap = new Map(savedQuantities.map((item) => [`${item.productKey}\u0000${item.variantName}`, item.orderedQuantity]));
+    const enrichedItems = items.map((item) => {
+      const factoryOrderedQuantity = quantityMap.get(`${item.productId || item.slug}\u0000${item.variantName}`) ?? 0;
+      return { ...item, factoryOrderedQuantity, surplusQuantity: factoryOrderedQuantity - item.quantity };
+    });
+    res.json({
+      items: enrichedItems,
+      totalQuantity: enrichedItems.reduce((sum, item) => sum + item.quantity, 0),
+      totalFactoryOrderedQuantity: enrichedItems.reduce((sum, item) => sum + item.factoryOrderedQuantity, 0),
+    });
+  }),
+);
+
+ordersRouter.put(
+  "/ordered-products-summary/factory-quantity",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const body = z.object({
+      productKey: z.string().trim().min(1),
+      variantName: z.string().trim().default(""),
+      orderedQuantity: z.number().int().nonnegative(),
+    }).parse(req.body);
+    const quantity = await FactoryOrderQuantity.findOneAndUpdate(
+      { productKey: body.productKey, variantName: body.variantName },
+      { $set: { orderedQuantity: body.orderedQuantity } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    );
+    res.json({ quantity });
   }),
 );
 
