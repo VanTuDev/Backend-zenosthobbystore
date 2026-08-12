@@ -24,6 +24,7 @@ const ALL_STATUSES = [
   "vietnam_warehouse",
   "shop_warehouse",
   "shipped",
+  "picked_up",
   "pending",
   "processing",
   "delivered",
@@ -31,7 +32,7 @@ const ALL_STATUSES = [
 ] as const;
 
 const STATUS_BY_TYPE: Record<OrderType, readonly OrderStatus[]> = {
-  in_stock: ["packing", "shipped"],
+  in_stock: ["packing", "shipped", "picked_up"],
   pre_order: [
     "deposit_received",
     "factory_ordered",
@@ -40,6 +41,7 @@ const STATUS_BY_TYPE: Record<OrderType, readonly OrderStatus[]> = {
     "vietnam_warehouse",
     "shop_warehouse",
     "shipped",
+    "picked_up",
   ],
 };
 
@@ -265,7 +267,7 @@ ordersRouter.get(
   requireAdmin,
   asyncHandler(async (_req, res) => {
     const [summary] = await Order.aggregate<{ totalAmount: number; depositAmount: number }>([
-      { $match: { status: { $ne: "shipped" } } },
+      { $match: { status: { $nin: ["shipped", "picked_up"] } } },
       { $group: { _id: null, totalAmount: { $sum: "$total" }, depositAmount: { $sum: "$depositAmount" } } },
       { $project: { _id: 0, totalAmount: 1, depositAmount: 1 } },
     ]);
@@ -288,9 +290,9 @@ ordersRouter.get(
       quantity: number;
       orderCount: number;
     }>([
-      { $match: { orderType: "pre_order", status: { $nin: ["shipped", "cancelled"] } } },
+      { $match: { orderType: "pre_order", status: { $nin: ["shipped", "picked_up", "cancelled"] } } },
       { $unwind: "$items" },
-      { $match: { "items.itemStatus": { $nin: ["shipped"] } } },
+      { $match: { "items.itemStatus": { $nin: ["shipped", "picked_up"] } } },
       {
         $group: {
           _id: {
@@ -529,6 +531,7 @@ ordersRouter.patch(
     order.status = body.status;
     order.statusMode = "manual";
     if (body.status === "shipped") order.trackingCode = body.trackingCode ?? order.trackingCode;
+    else order.trackingCode = "";
     await order.save();
     res.json({ order });
   }),

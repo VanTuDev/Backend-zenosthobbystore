@@ -11,6 +11,7 @@ export type OrderStatus =
   | "vietnam_warehouse"
   | "shop_warehouse"
   | "shipped"
+  | "picked_up"
   // Legacy values are kept so older records remain readable.
   | "pending"
   | "processing"
@@ -82,7 +83,7 @@ const orderItemSchema = new Schema<OrderItemDoc>(
     quantity: { type: Number, required: true, min: 1 },
     itemStatus: {
       type: String,
-      enum: ["packing", "deposit_received", "factory_ordered", "factory_shipped", "transit_warehouse", "vietnam_warehouse", "shop_warehouse", "shipped"],
+      enum: ["packing", "deposit_received", "factory_ordered", "factory_shipped", "transit_warehouse", "vietnam_warehouse", "shop_warehouse", "shipped", "picked_up"],
       default: undefined,
     },
   },
@@ -122,6 +123,7 @@ const orderSchema = new Schema<OrderDoc>({
       "vietnam_warehouse",
       "shop_warehouse",
       "shipped",
+      "picked_up",
       "pending",
       "processing",
       "delivered",
