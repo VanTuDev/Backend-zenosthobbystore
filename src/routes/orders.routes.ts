@@ -340,6 +340,42 @@ ordersRouter.get(
   }),
 );
 
+ordersRouter.get(
+  "/ordered-products-summary/orders",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { productKey, variantName } = z
+      .object({ productKey: z.string().min(1), variantName: z.string().default("") })
+      .parse(req.query);
+    const productCondition = Types.ObjectId.isValid(productKey)
+      ? { $or: [{ productId: new Types.ObjectId(productKey) }, { slug: productKey }] }
+      : { slug: productKey };
+    const itemMatch = { ...productCondition, variantName };
+    const orders = await Order.find({
+      orderType: "pre_order",
+      status: { $nin: ["shipped", "picked_up", "cancelled"] },
+      items: { $elemMatch: { ...itemMatch, itemStatus: { $nin: ["shipped", "picked_up"] } } },
+    }).sort({ placedAt: 1, _id: 1 });
+
+    res.json({
+      orders: orders.map((order) => ({
+        id: order.id,
+        publicCode: order.publicCode,
+        facebookName: order.facebookName,
+        status: order.status,
+        quantity: order.items
+          .filter((item) => {
+            const sameProduct = item.productId
+              ? String(item.productId) === productKey
+              : item.slug === productKey;
+            return sameProduct && item.variantName === variantName && !["shipped", "picked_up"].includes(item.itemStatus ?? order.status);
+          })
+          .reduce((sum, item) => sum + item.quantity, 0),
+      })),
+    });
+  }),
+);
+
 ordersRouter.put(
   "/ordered-products-summary/factory-quantity",
   requireAdmin,
