@@ -2,6 +2,7 @@ import { Schema, model, Types } from "mongoose";
 import { applyJsonTransform } from "./plugin";
 
 export type StockStatus = "in_stock" | "pre_order" | "sold_out" | "coming_soon";
+export type ProductType = "in_stock" | "pre_order";
 
 export interface ProductSpec {
   label: string;
@@ -32,6 +33,7 @@ export interface ProductDoc {
   brand: string;
   universe: string;
   scale: string;
+  productType: ProductType;
   price: number;
   compareAtPrice?: number | null;
   sellingPrice?: number | null;
@@ -86,6 +88,7 @@ const productSchema = new Schema<ProductDoc>(
     brand: { type: String, default: "" },
     universe: { type: String, default: "" },
     scale: { type: String, default: "" },
+    productType: { type: String, enum: ["in_stock", "pre_order"], default: "in_stock" },
     price: { type: Number, required: true, min: 0 },
     compareAtPrice: { type: Number, default: null },
     sellingPrice: { type: Number, default: null },
