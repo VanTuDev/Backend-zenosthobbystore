@@ -28,7 +28,22 @@ async function withProductCount(categories: HydratedDocument<CategoryDoc>[]) {
     { $group: { _id: "$categoryId", count: { $sum: 1 } } },
   ]);
   const countMap = new Map(counts.map((c) => [String(c._id), c.count]));
-  return categories.map((c) => ({ ...c.toJSON(), productCount: countMap.get(c.id) ?? 0 }));
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const totals = new Map(categories.map((category) => [category.id, countMap.get(category.id) ?? 0]));
+
+  for (const category of categories) {
+    const directCount = countMap.get(category.id) ?? 0;
+    let parentId = category.parentId ? String(category.parentId) : null;
+    const visited = new Set<string>();
+    while (parentId && categoryById.has(parentId) && !visited.has(parentId)) {
+      visited.add(parentId);
+      totals.set(parentId, (totals.get(parentId) ?? 0) + directCount);
+      const parent = categoryById.get(parentId)!;
+      parentId = parent.parentId ? String(parent.parentId) : null;
+    }
+  }
+
+  return categories.map((category) => ({ ...category.toJSON(), productCount: totals.get(category.id) ?? 0 }));
 }
 
 categoriesRouter.get(

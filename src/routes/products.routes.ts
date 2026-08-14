@@ -4,6 +4,7 @@ import { z } from "zod";
 import { attachUser, requireAdmin } from "../middleware/auth";
 import { requireDb } from "../middleware/require-db";
 import { Product } from "../models/product.model";
+import { Category } from "../models/category.model";
 import { ApiError } from "../utils/api-error";
 import { asyncHandler } from "../utils/async-handler";
 import { getPagination, paginatedResponse } from "../utils/pagination";
@@ -37,7 +38,7 @@ const productVideoSchema = z.object({
 
 const productVariantSchema = z.object({
   name: z.string().min(1),
-  price: z.number().int().nonnegative().optional(),
+  price: z.number().int().positive("Giá biến thể phải lớn hơn 0."),
   stockCount: z.number().int().nonnegative().default(0),
   image: z.string().default(""),
 });
@@ -48,7 +49,8 @@ const productSchema = z.object({
   brand: z.string().default(""),
   universe: z.string().default(""),
   scale: z.string().default(""),
-  price: z.number().int().positive("Giá biến thể phải lớn hơn 0."),
+  productType: z.enum(["in_stock", "pre_order"]).default("in_stock"),
+  price: z.number().int().nonnegative().optional(),
   compareAtPrice: z.number().int().nonnegative().nullable().optional(),
   sellingPrice: z.number().int().nonnegative().nullable().optional(),
   originalPrice: z.number().int().nonnegative().nullable().optional(),
@@ -110,11 +112,31 @@ const OEMBED_URL: Record<"tiktok" | "youtube", (url: string) => string> = {
   youtube: (url) => `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
 };
 
+async function includeDescendantCategoryIds(selectedIds: string[]) {
+  if (selectedIds.length === 0) return selectedIds;
+  const categories = await Category.find().select("_id parentId").lean();
+  const expanded = new Set(selectedIds);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const category of categories) {
+      if (!category.parentId || !expanded.has(String(category.parentId))) continue;
+      const id = String(category._id);
+      if (!expanded.has(id)) {
+        expanded.add(id);
+        changed = true;
+      }
+    }
+  }
+  return [...expanded];
+}
+
 productsRouter.get(
   "/",
   asyncHandler(async (req, res) => {
-    const { q, stockStatus, scale, sort } = req.query as Record<string, string | undefined>;
+    const { q, stockStatus, productType, scale, sort } = req.query as Record<string, string | undefined>;
     const categoryIds = toArray(req.query.categoryId);
+    const expandedCategoryIds = await includeDescendantCategoryIds(categoryIds);
     const brands = toArray(req.query.brand);
     const badges = toArray(req.query.badge);
     const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
@@ -125,9 +147,17 @@ productsRouter.get(
     if (minPrice !== undefined && !Number.isNaN(minPrice)) priceFilter.$gte = minPrice;
     if (maxPrice !== undefined && !Number.isNaN(maxPrice)) priceFilter.$lte = maxPrice;
 
+    const requestedProductType = productType ?? (stockStatus === "pre_order" ? "pre_order" : undefined);
+    const normalizedStockStatus = stockStatus === "pre_order" ? undefined : stockStatus;
+    const typeAndStockFilter: Record<string, unknown> = requestedProductType === "pre_order"
+      ? { $or: [{ productType: "pre_order" }, { productType: { $exists: false }, stockStatus: "pre_order" }] }
+      : requestedProductType === "in_stock"
+        ? { $and: [{ productType: { $ne: "pre_order" } }, { stockStatus: { $ne: "pre_order" } }] }
+        : {};
     const filter: Record<string, unknown> = {
-      ...(categoryIds.length ? { categoryId: { $in: categoryIds } } : {}),
-      ...(stockStatus ? { stockStatus } : {}),
+      ...(expandedCategoryIds.length ? { categoryId: { $in: expandedCategoryIds } } : {}),
+      ...typeAndStockFilter,
+      ...(normalizedStockStatus ? { stockStatus: normalizedStockStatus } : {}),
       ...(brands.length ? { brand: { $in: brands } } : {}),
       ...(badges.length ? { badges: { $in: badges } } : {}),
       ...(scale ? { scale } : {}),
