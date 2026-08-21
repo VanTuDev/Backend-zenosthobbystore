@@ -142,6 +142,8 @@ productsRouter.get(
     const minPrice = req.query.minPrice !== undefined ? Number(req.query.minPrice) : undefined;
     const maxPrice = req.query.maxPrice !== undefined ? Number(req.query.maxPrice) : undefined;
     const pagination = getPagination(req);
+    const searchText = q?.trim() ?? "";
+    const escapedSearch = searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
     const priceFilter: Record<string, number> = {};
     if (minPrice !== undefined && !Number.isNaN(minPrice)) priceFilter.$gte = minPrice;
@@ -154,15 +156,25 @@ productsRouter.get(
       : requestedProductType === "in_stock"
         ? { $and: [{ productType: { $ne: "pre_order" } }, { stockStatus: { $ne: "pre_order" } }] }
         : {};
+    const compoundFilters: Record<string, unknown>[] = [];
+    if (Object.keys(typeAndStockFilter).length > 0) compoundFilters.push(typeAndStockFilter);
+    if (searchText) {
+      compoundFilters.push({
+        $or: [
+          { name: { $regex: escapedSearch, $options: "i" } },
+          { brand: { $regex: escapedSearch, $options: "i" } },
+          { universe: { $regex: escapedSearch, $options: "i" } },
+        ],
+      });
+    }
     const filter: Record<string, unknown> = {
       ...(expandedCategoryIds.length ? { categoryId: { $in: expandedCategoryIds } } : {}),
-      ...typeAndStockFilter,
+      ...(compoundFilters.length ? { $and: compoundFilters } : {}),
       ...(normalizedStockStatus ? { stockStatus: normalizedStockStatus } : {}),
       ...(brands.length ? { brand: { $in: brands } } : {}),
       ...(badges.length ? { badges: { $in: badges } } : {}),
       ...(scale ? { scale } : {}),
       ...(Object.keys(priceFilter).length ? { price: priceFilter } : {}),
-      ...(q ? { $text: { $search: q } } : {}),
     };
 
     const sortSpec = SORT_OPTIONS[sort ?? ""] ?? SORT_OPTIONS["moi-nhap"];
