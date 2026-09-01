@@ -1,5 +1,6 @@
 import { randomInt } from "node:crypto";
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { Types } from "mongoose";
 import { z } from "zod";
 import { attachUser, requireAdmin, requireAuth } from "../middleware/auth";
@@ -7,10 +8,13 @@ import { requireDb } from "../middleware/require-db";
 import { FinanceTransaction } from "../models/finance-transaction.model";
 import { FactoryOrderQuantity } from "../models/factory-order-quantity.model";
 import { Order, type OrderItemDoc, type OrderStatus, type OrderType } from "../models/order.model";
+import { Province } from "../models/province.model";
+import { Ward } from "../models/ward.model";
 import { ApiError } from "../utils/api-error";
 import { asyncHandler } from "../utils/async-handler";
 import { financeStatusFor } from "../utils/finance-status";
 import { getPagination, paginatedResponse } from "../utils/pagination";
+import { getLegacyDistricts, getLegacyProvinces, getLegacyWards } from "../lib/legacy-locations";
 
 export const ordersRouter = Router();
 ordersRouter.use(requireDb);
@@ -80,10 +84,33 @@ const detailsSchema = z.object({
   orderType: z.enum(["in_stock", "pre_order"]).optional(),
   facebookName: z.string().trim().min(1).optional(),
   facebookUrl: z.string().trim().url().optional(),
+  recipientName: z.string().trim().max(100).optional(),
   phone: z.string().trim().optional(),
   addressDetail: z.string().trim().optional(),
   total: z.number().int().nonnegative().optional(),
   depositAmount: z.number().int().nonnegative().optional(),
+});
+
+const publicShippingDetailsSchema = z.object({
+  recipientName: z.string().trim().min(2, "Vui lòng nhập tên người nhận.").max(100),
+  phone: z
+    .string()
+    .trim()
+    .min(8, "Số điện thoại chưa hợp lệ.")
+    .max(20, "Số điện thoại chưa hợp lệ.")
+    .regex(/^[0-9+().\s-]+$/, "Số điện thoại chưa hợp lệ."),
+  addressFormat: z.enum(["legacy_3_level", "new_2_level"]),
+  provinceCode: z.string().trim().min(1),
+  districtCode: z.string().trim().default(""),
+  wardCode: z.string().trim().min(1),
+  addressDetail: z.string().trim().min(2, "Vui lòng nhập số nhà, đường hoặc thôn/xóm.").max(200),
+});
+
+const publicShippingDetailsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 const itemStatusSchema = z.object({ status: z.enum(ALL_STATUSES) });
@@ -174,10 +201,14 @@ ordersRouter.post(
       facebookName: body.facebookName,
       facebookUrl: body.facebookUrl,
       customerName: body.facebookName,
+      recipientName: "",
       customerEmail: "",
       phone: body.phone,
+      addressFormat: "new_2_level",
       provinceCode: "",
       provinceName: "",
+      districtCode: "",
+      districtName: "",
       wardCode: "",
       wardName: "",
       addressDetail: body.addressDetail,
@@ -224,6 +255,16 @@ ordersRouter.get(
         publicCode: order.publicCode,
         orderType: order.orderType,
         facebookName: order.facebookName,
+        recipientName: order.recipientName,
+        phone: order.phone,
+        addressFormat: order.addressFormat,
+        provinceCode: order.provinceCode,
+        provinceName: order.provinceName,
+        districtCode: order.districtCode,
+        districtName: order.districtName,
+        wardCode: order.wardCode,
+        wardName: order.wardName,
+        addressDetail: order.addressDetail,
         items: order.items,
         subtotal: order.subtotal,
         total: order.total,
@@ -235,6 +276,76 @@ ordersRouter.get(
         updatedAt: order.updatedAt,
         sourceOrderCode: order.sourceOrderCode,
         splitOrderCodes: order.splitOrderCodes,
+      },
+    });
+  }),
+);
+
+/** Public capability-link update. Only shipping contact fields can be changed. */
+ordersRouter.patch(
+  "/public/:code/shipping-details",
+  publicShippingDetailsLimiter,
+  asyncHandler(async (req, res) => {
+    const code = z.string().regex(/^[a-z0-9]{6}$/).parse(req.params.code.toLowerCase());
+    const body = publicShippingDetailsSchema.parse(req.body);
+    const order = await Order.findOne({ publicCode: code });
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+    if (["shipped", "picked_up", "delivered", "cancelled"].includes(order.status)) {
+      throw ApiError.badRequest("Đơn hàng đã hoàn tất nên không thể thay đổi thông tin nhận hàng.");
+    }
+
+    let provinceName = "";
+    let districtName = "";
+    let wardName = "";
+    if (body.addressFormat === "new_2_level") {
+      const [province, ward] = await Promise.all([
+        Province.findOne({ code: body.provinceCode }),
+        Ward.findOne({ code: body.wardCode, provinceCode: body.provinceCode }),
+      ]);
+      if (!province || !ward) throw ApiError.badRequest("Tỉnh/thành phố hoặc phường/xã không hợp lệ.");
+      provinceName = province.fullName;
+      wardName = ward.fullName;
+    } else {
+      if (!body.districtCode) throw ApiError.badRequest("Vui lòng chọn quận/huyện.");
+      const [provinces, districts, wards] = await Promise.all([
+        getLegacyProvinces(),
+        getLegacyDistricts(body.provinceCode),
+        getLegacyWards(body.districtCode),
+      ]);
+      const province = provinces.find((item) => String(item.code) === body.provinceCode);
+      const district = districts.find((item) => String(item.code) === body.districtCode);
+      const ward = wards.find((item) => String(item.code) === body.wardCode);
+      if (!province || !district || !ward) throw ApiError.badRequest("Địa chỉ hành chính cũ không hợp lệ.");
+      provinceName = province.name;
+      districtName = district.name;
+      wardName = ward.name;
+    }
+
+    order.recipientName = body.recipientName;
+    order.phone = body.phone;
+    order.addressFormat = body.addressFormat;
+    order.provinceCode = body.provinceCode;
+    order.provinceName = provinceName;
+    order.districtCode = body.addressFormat === "legacy_3_level" ? body.districtCode : "";
+    order.districtName = districtName;
+    order.wardCode = body.wardCode;
+    order.wardName = wardName;
+    order.addressDetail = body.addressDetail;
+    order.shippingAddress = [body.addressDetail, wardName, districtName, provinceName].filter(Boolean).join(", ");
+    await order.save();
+
+    res.json({
+      shippingDetails: {
+        recipientName: order.recipientName,
+        phone: order.phone,
+        addressFormat: order.addressFormat,
+        provinceCode: order.provinceCode,
+        provinceName: order.provinceName,
+        districtCode: order.districtCode,
+        districtName: order.districtName,
+        wardCode: order.wardCode,
+        wardName: order.wardName,
+        addressDetail: order.addressDetail,
       },
     });
   }),
@@ -498,10 +609,14 @@ ordersRouter.post(
       facebookName: order.facebookName,
       facebookUrl: order.facebookUrl,
       customerName: order.customerName,
+      recipientName: order.recipientName,
       customerEmail: order.customerEmail,
       phone: order.phone,
+      addressFormat: order.addressFormat,
       provinceCode: order.provinceCode,
       provinceName: order.provinceName,
+      districtCode: order.districtCode,
+      districtName: order.districtName,
       wardCode: order.wardCode,
       wardName: order.wardName,
       addressDetail: order.addressDetail,
@@ -624,10 +739,11 @@ ordersRouter.patch(
       order.trackingCode = "";
     }
     if (body.facebookUrl !== undefined) order.facebookUrl = body.facebookUrl;
+    if (body.recipientName !== undefined) order.recipientName = body.recipientName;
     if (body.phone !== undefined) order.phone = body.phone;
     if (body.addressDetail !== undefined) {
       order.addressDetail = body.addressDetail;
-      order.shippingAddress = body.addressDetail;
+      order.shippingAddress = [body.addressDetail, order.wardName, order.districtName, order.provinceName].filter(Boolean).join(", ");
     }
     order.total = total;
     order.depositAmount = depositAmount;

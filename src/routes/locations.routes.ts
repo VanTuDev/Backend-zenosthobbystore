@@ -5,6 +5,7 @@ import { Ward } from "../models/ward.model";
 import { ApiError } from "../utils/api-error";
 import { asyncHandler } from "../utils/async-handler";
 import { slugify } from "../utils/slugify";
+import { getLegacyDistricts, getLegacyProvinces, getLegacyWards } from "../lib/legacy-locations";
 
 /** Public, read-only Vietnam administrative data (post-2025 2-level reform: province -> ward). */
 export const locationsRouter = Router();
@@ -31,6 +32,35 @@ locationsRouter.get(
     const { q } = req.query as Record<string, string | undefined>;
     const provinces = await Province.find().sort({ name: 1 });
     res.json({ provinces: filterByQuery(provinces, q) });
+  }),
+);
+
+locationsRouter.get(
+  "/legacy/provinces",
+  asyncHandler(async (req, res) => {
+    const { q } = req.query as Record<string, string | undefined>;
+    const provinces = (await getLegacyProvinces()).map((item) => ({ code: String(item.code), name: item.name, fullName: item.name }));
+    res.json({ provinces: filterByQuery(provinces, q) });
+  }),
+);
+
+locationsRouter.get(
+  "/legacy/districts",
+  asyncHandler(async (req, res) => {
+    const { provinceCode, q } = req.query as Record<string, string | undefined>;
+    if (!provinceCode?.trim()) throw ApiError.badRequest("Thiếu tham số provinceCode.");
+    const districts = (await getLegacyDistricts(provinceCode)).map((item) => ({ code: String(item.code), name: item.name, fullName: item.name }));
+    res.json({ districts: filterByQuery(districts, q) });
+  }),
+);
+
+locationsRouter.get(
+  "/legacy/wards",
+  asyncHandler(async (req, res) => {
+    const { districtCode, q } = req.query as Record<string, string | undefined>;
+    if (!districtCode?.trim()) throw ApiError.badRequest("Thiếu tham số districtCode.");
+    const wards = (await getLegacyWards(districtCode)).map((item) => ({ code: String(item.code), name: item.name, fullName: item.name }));
+    res.json({ wards: filterByQuery(wards, q) });
   }),
 );
 
