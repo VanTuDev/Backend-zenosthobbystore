@@ -37,10 +37,14 @@ export interface OrderDoc {
   facebookName: string;
   facebookUrl: string;
   customerName: string;
+  recipientName: string;
   customerEmail: string;
   phone: string;
+  addressFormat: "legacy_3_level" | "new_2_level";
   provinceCode: string;
   provinceName: string;
+  districtCode: string;
+  districtName: string;
   wardCode: string;
   wardName: string;
   addressDetail: string;
@@ -96,10 +100,14 @@ const orderSchema = new Schema<OrderDoc>({
   facebookName: { type: String, default: "", trim: true },
   facebookUrl: { type: String, default: "", trim: true },
   customerName: { type: String, required: true },
+  recipientName: { type: String, default: "", trim: true },
   customerEmail: { type: String, default: "", lowercase: true, trim: true },
   phone: { type: String, default: "" },
+  addressFormat: { type: String, enum: ["legacy_3_level", "new_2_level"], default: "new_2_level" },
   provinceCode: { type: String, default: "" },
   provinceName: { type: String, default: "" },
+  districtCode: { type: String, default: "" },
+  districtName: { type: String, default: "" },
   wardCode: { type: String, default: "" },
   wardName: { type: String, default: "" },
   addressDetail: { type: String, default: "" },
