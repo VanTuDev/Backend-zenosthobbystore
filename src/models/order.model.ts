@@ -63,6 +63,7 @@ export interface OrderDoc {
   trackingCode: string;
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
+  paymentProofImages: Array<{ url: string; publicId: string }>;
   placedAt: Date;
   userId: Types.ObjectId | null;
   promotionCode?: string | null;
@@ -147,6 +148,20 @@ const orderSchema = new Schema<OrderDoc>({
     required: true,
   },
   paymentStatus: { type: String, enum: ["not_deposited", "deposited", "paid", "unpaid", "refunded"], default: "not_deposited" },
+  paymentProofImages: {
+    type: [new Schema(
+      {
+        url: { type: String, required: true },
+        publicId: { type: String, required: true },
+      },
+      { _id: false },
+    )],
+    default: [],
+    validate: {
+      validator: (images: unknown[]) => images.length <= 5,
+      message: "Mỗi đơn hàng chỉ được lưu tối đa 5 ảnh giao dịch.",
+    },
+  },
   placedAt: { type: Date, default: Date.now },
   userId: { type: Schema.Types.ObjectId, ref: "User", default: null },
   promotionCode: { type: String, default: null },

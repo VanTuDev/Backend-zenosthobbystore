@@ -1,4 +1,4 @@
-import { v2 as cloudinary, type UploadApiResponse } from "cloudinary";
+import { v2 as cloudinary, type UploadApiOptions, type UploadApiResponse } from "cloudinary";
 import { env, isCloudinaryConfigured } from "../config/env";
 
 if (isCloudinaryConfigured) {
@@ -11,9 +11,13 @@ if (isCloudinaryConfigured) {
 }
 
 /** Streams a buffer (e.g. from multer memory storage) up to Cloudinary. */
-export function uploadImageBuffer(buffer: Buffer, folder = "zenosthobbystore/products"): Promise<UploadApiResponse> {
+export function uploadImageBuffer(
+  buffer: Buffer,
+  folder = "zenosthobbystore/products",
+  options: UploadApiOptions = {},
+): Promise<UploadApiResponse> {
   return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream({ folder, resource_type: "image" }, (err, result) => {
+    const stream = cloudinary.uploader.upload_stream({ ...options, folder, resource_type: "image" }, (err, result) => {
       if (err || !result) return reject(err ?? new Error("Cloudinary upload failed with no result"));
       resolve(result);
     });

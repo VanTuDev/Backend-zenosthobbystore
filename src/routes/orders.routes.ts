@@ -80,6 +80,13 @@ const paymentStatusSchema = z.object({
   paymentStatus: z.enum(["not_deposited", "deposited", "paid"]),
 });
 
+const paymentProofSchema = z.object({
+  paymentProofImages: z.array(z.object({
+    url: z.string().url(),
+    publicId: z.string().trim().min(1).max(500),
+  })).max(5),
+});
+
 const detailsSchema = z.object({
   orderType: z.enum(["in_stock", "pre_order"]).optional(),
   facebookName: z.string().trim().min(1).optional(),
@@ -710,6 +717,17 @@ ordersRouter.patch(
     const order = await Order.findByIdAndUpdate(req.params.id, { paymentStatus }, { new: true });
     if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
     await FinanceTransaction.findOneAndUpdate({ orderId: order.id }, { status: financeStatusFor(paymentStatus) });
+    res.json({ order });
+  }),
+);
+
+ordersRouter.patch(
+  "/:id/payment-proof",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { paymentProofImages } = paymentProofSchema.parse(req.body);
+    const order = await Order.findByIdAndUpdate(req.params.id, { paymentProofImages }, { new: true, runValidators: true });
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
     res.json({ order });
   }),
 );

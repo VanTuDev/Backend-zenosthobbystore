@@ -37,6 +37,23 @@ uploadsRouter.post(
   }),
 );
 
+/** Admin-only: upload a bank transaction screenshot for an order. */
+uploadsRouter.post(
+  "/payment-proof",
+  attachUser,
+  requireAdmin,
+  requireCloudinary,
+  upload.single("file"),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw ApiError.badRequest("Thiếu file ảnh (field 'file').");
+    const result = await uploadImageBuffer(req.file.buffer, "zenosthobbystore/payment-proofs", {
+      format: "webp",
+      transformation: [{ width: 1600, height: 1600, crop: "limit", quality: "auto:good" }],
+    });
+    res.status(201).json({ url: result.secure_url, publicId: result.public_id });
+  }),
+);
+
 /** Public: attach a photo to a support ticket on the "Liên hệ" form — no login required to ask for support. */
 uploadsRouter.post(
   "/contact-image",
