@@ -76,6 +76,20 @@ const statusSchema = z.object({
   trackingCode: z.string().trim().max(100).optional(),
 });
 
+const shippingScanMatchSchema = z.object({
+  trackingCode: z.string().trim().min(6).max(100),
+  recipientName: z.string().trim().max(150).default(""),
+  phone: z.string().trim().max(30).default(""),
+  address: z.string().trim().max(500).default(""),
+}).refine((value) => value.recipientName || value.phone || value.address, {
+  message: "Cần có tên, số điện thoại hoặc địa chỉ người nhận để đối chiếu đơn hàng.",
+});
+
+const shippingScanConfirmSchema = z.object({
+  orderId: z.string().refine((value) => Types.ObjectId.isValid(value), "Mã đơn hàng không hợp lệ."),
+  trackingCode: z.string().trim().min(6).max(100),
+});
+
 const paymentStatusSchema = z.object({
   paymentStatus: z.enum(["not_deposited", "deposited", "paid"]),
 });
@@ -147,6 +161,40 @@ function normalizeLegacyPaymentStatus<T extends { paymentStatus: string; deposit
     order.paymentStatus = paymentStatusForAmounts(order.depositAmount ?? 0, order.total);
   }
   return order;
+}
+
+function normalizeMatchText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/gi, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizedPhone(value: string) {
+  let phone = value.replace(/\D/g, "");
+  if (phone.startsWith("84") && phone.length >= 11) phone = `0${phone.slice(2)}`;
+  return phone;
+}
+
+function tokenSimilarity(left: string, right: string) {
+  const leftTokens = new Set(normalizeMatchText(left).split(" ").filter((token) => token.length > 1));
+  const rightTokens = new Set(normalizeMatchText(right).split(" ").filter((token) => token.length > 1));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  let intersection = 0;
+  for (const token of leftTokens) if (rightTokens.has(token)) intersection += 1;
+  return (2 * intersection) / (leftTokens.size + rightTokens.size);
+}
+
+function nameSimilarity(left: string, right: string) {
+  const normalizedLeft = normalizeMatchText(left);
+  const normalizedRight = normalizeMatchText(right);
+  if (!normalizedLeft || !normalizedRight) return 0;
+  if (normalizedLeft === normalizedRight) return 1;
+  if (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)) return 0.9;
+  return tokenSimilarity(left, right);
 }
 
 function earliestItemStatus(order: { orderType?: OrderType; status: OrderStatus; items: Array<{ itemStatus?: OrderStatus }> }) {
@@ -392,6 +440,99 @@ ordersRouter.get(
     const totalAmount = summary?.totalAmount ?? 0;
     const depositAmount = summary?.depositAmount ?? 0;
     res.json({ totalAmount, depositAmount, remainingAmount: Math.max(0, totalAmount - depositAmount) });
+  }),
+);
+
+ordersRouter.post(
+  "/shipping-scan/match",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const body = shippingScanMatchSchema.parse(req.body);
+    const orders = await Order.find({ status: { $nin: ["shipped", "picked_up", "delivered", "cancelled"] } })
+      .sort({ placedAt: 1, _id: 1 })
+      .lean();
+
+    const scannedPhone = normalizedPhone(body.phone);
+    const candidates = orders
+      .map((order) => {
+        const candidateName = order.recipientName || order.facebookName || order.customerName;
+        const candidateAddress = [
+          order.addressDetail,
+          order.wardName,
+          order.districtName,
+          order.provinceName,
+          order.shippingAddress,
+        ].filter(Boolean).join(" ");
+        const candidatePhone = normalizedPhone(order.phone);
+        const phoneExact = scannedPhone.length >= 9 && scannedPhone === candidatePhone;
+        const nameScore = nameSimilarity(body.recipientName, candidateName);
+        const addressScore = tokenSimilarity(body.address, candidateAddress);
+        const score = Math.min(100, Math.round((phoneExact ? 55 : 0) + nameScore * 35 + addressScore * 45));
+        const confidence = score >= 70 && (phoneExact || (nameScore >= 0.65 && addressScore >= 0.35))
+          ? "high"
+          : score >= 42
+            ? "medium"
+            : "low";
+        return {
+          order,
+          score,
+          confidence,
+          signals: { phoneExact, nameScore, addressScore },
+          candidateName,
+          candidateAddress,
+        };
+      })
+      .filter((candidate) => candidate.score >= 25)
+      .sort((left, right) => right.score - left.score || Number(left.order.placedAt) - Number(right.order.placedAt))
+      .slice(0, 8)
+      .map(({ order, score, confidence, signals, candidateName, candidateAddress }) => ({
+        order: {
+          id: String(order._id),
+          publicCode: order.publicCode,
+          facebookName: order.facebookName,
+          recipientName: candidateName,
+          phone: order.phone,
+          address: candidateAddress,
+          status: order.status,
+          itemCount: order.items.reduce((sum, item) => sum + item.quantity, 0),
+          total: order.total,
+        },
+        score,
+        confidence,
+        signals,
+      }));
+
+    res.json({
+      scan: body,
+      candidates,
+      recommendedOrderId: candidates[0]?.confidence === "high" ? candidates[0].order.id : null,
+    });
+  }),
+);
+
+ordersRouter.post(
+  "/shipping-scan/confirm",
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const body = shippingScanConfirmSchema.parse(req.body);
+    const trackingCode = body.trackingCode.toUpperCase().replace(/\s+/g, "");
+    const order = await Order.findById(body.orderId);
+    if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
+
+    if (order.status === "shipped" && order.trackingCode === trackingCode) {
+      return res.json({ order, alreadyUpdated: true });
+    }
+    if (["shipped", "picked_up", "delivered", "cancelled"].includes(order.status)) {
+      throw ApiError.badRequest("Đơn hàng đã vận chuyển, hoàn thành hoặc hủy nên không thể cập nhật bằng nhãn này.");
+    }
+    const duplicateTracking = await Order.exists({ _id: { $ne: order._id }, trackingCode });
+    if (duplicateTracking) throw ApiError.conflict("Mã vận đơn này đã được dùng cho một đơn hàng khác.");
+
+    order.status = "shipped";
+    order.statusMode = "manual";
+    order.trackingCode = trackingCode;
+    await order.save();
+    res.json({ order, alreadyUpdated: false });
   }),
 );
 
