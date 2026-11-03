@@ -74,6 +74,7 @@ const createManualOrderSchema = z.object({
 const statusSchema = z.object({
   status: z.enum(ALL_STATUSES),
   trackingCode: z.string().trim().max(100).optional(),
+  trackingCodes: z.array(z.string().trim().min(1).max(100)).max(10).optional(),
 });
 
 const paymentStatusSchema = z.object({
@@ -147,6 +148,10 @@ function normalizeLegacyPaymentStatus<T extends { paymentStatus: string; deposit
     order.paymentStatus = paymentStatusForAmounts(order.depositAmount ?? 0, order.total);
   }
   return order;
+}
+
+function normalizeTrackingCodes(values: string[]) {
+  return [...new Set(values.map((value) => value.trim().toUpperCase()).filter(Boolean))];
 }
 
 function earliestItemStatus(order: { orderType?: OrderType; status: OrderStatus; items: Array<{ itemStatus?: OrderStatus }> }) {
@@ -231,6 +236,7 @@ ordersRouter.post(
       status,
       statusMode: "auto",
       trackingCode: "",
+      trackingCodes: [],
       paymentMethod: "Chuyển khoản",
       paymentStatus,
       userId: req.user!.sub,
@@ -279,6 +285,7 @@ ordersRouter.get(
         remainingAmount: order.remainingAmount,
         status: order.status,
         trackingCode: order.trackingCode,
+        trackingCodes: normalizeTrackingCodes(order.trackingCodes?.length ? order.trackingCodes : [order.trackingCode]),
         placedAt: order.placedAt,
         updatedAt: order.updatedAt,
         sourceOrderCode: order.sourceOrderCode,
@@ -639,6 +646,7 @@ ordersRouter.post(
       status: "packing",
       statusMode: "auto",
       trackingCode: "",
+      trackingCodes: [],
       paymentMethod: order.paymentMethod,
       paymentStatus: newPaymentStatus,
       userId: order.userId,
@@ -688,8 +696,17 @@ ordersRouter.patch(
     }
     order.status = body.status;
     order.statusMode = "manual";
-    if (body.status === "shipped") order.trackingCode = body.trackingCode ?? order.trackingCode;
-    else order.trackingCode = "";
+    if (body.status === "shipped") {
+      const existingCodes = order.trackingCodes?.length ? order.trackingCodes : [order.trackingCode];
+      const trackingCodes = normalizeTrackingCodes(
+        body.trackingCodes ?? (body.trackingCode !== undefined ? [body.trackingCode] : existingCodes),
+      );
+      order.trackingCodes = trackingCodes;
+      order.trackingCode = trackingCodes[0] ?? "";
+    } else {
+      order.trackingCode = "";
+      order.trackingCodes = [];
+    }
     await order.save();
     res.json({ order });
   }),
@@ -703,7 +720,10 @@ ordersRouter.patch(
     if (!order) throw ApiError.notFound("Không tìm thấy đơn hàng.");
     order.statusMode = "auto";
     order.status = earliestItemStatus(order);
-    if (order.status !== "shipped") order.trackingCode = "";
+    if (order.status !== "shipped") {
+      order.trackingCode = "";
+      order.trackingCodes = [];
+    }
     await order.save();
     res.json({ order });
   }),
@@ -755,6 +775,7 @@ ordersRouter.patch(
       order.items.forEach((item) => { item.itemStatus = order.status; });
       order.markModified("items");
       order.trackingCode = "";
+      order.trackingCodes = [];
     }
     if (body.facebookUrl !== undefined) order.facebookUrl = body.facebookUrl;
     if (body.recipientName !== undefined) order.recipientName = body.recipientName;

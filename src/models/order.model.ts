@@ -61,6 +61,7 @@ export interface OrderDoc {
   status: OrderStatus;
   statusMode: "auto" | "manual";
   trackingCode: string;
+  trackingCodes: string[];
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   paymentProofImages: Array<{ url: string; publicId: string }>;
@@ -142,6 +143,7 @@ const orderSchema = new Schema<OrderDoc>({
   },
   statusMode: { type: String, enum: ["auto", "manual"], default: "auto" },
   trackingCode: { type: String, default: "", trim: true },
+  trackingCodes: { type: [String], default: [] },
   paymentMethod: {
     type: String,
     enum: ["Chuyển khoản", "COD", "Thẻ tín dụng", "Ví điện tử"],
