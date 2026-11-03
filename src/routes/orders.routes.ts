@@ -78,9 +78,11 @@ const statusSchema = z.object({
 
 const shippingScanMatchSchema = z.object({
   trackingCode: z.string().trim().min(6).max(100),
-  recipientName: z.string().trim().min(1, "Cần có tên người nhận để tìm đơn hàng.").max(150),
+  recipientName: z.string().trim().max(150).default(""),
   phone: z.string().trim().max(30).default(""),
   address: z.string().trim().max(500).default(""),
+}).refine((value) => value.recipientName || value.phone || value.address, {
+  message: "Cần có tên, số điện thoại hoặc địa chỉ người nhận để đối chiếu đơn hàng.",
 });
 
 const shippingScanConfirmSchema = z.object({
@@ -184,6 +186,15 @@ function tokenSimilarity(left: string, right: string) {
   let intersection = 0;
   for (const token of leftTokens) if (rightTokens.has(token)) intersection += 1;
   return (2 * intersection) / (leftTokens.size + rightTokens.size);
+}
+
+function nameSimilarity(left: string, right: string) {
+  const normalizedLeft = normalizeMatchText(left);
+  const normalizedRight = normalizeMatchText(right);
+  if (!normalizedLeft || !normalizedRight) return 0;
+  if (normalizedLeft === normalizedRight) return 1;
+  if (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft)) return 0.9;
+  return tokenSimilarity(left, right);
 }
 
 function earliestItemStatus(order: { orderType?: OrderType; status: OrderStatus; items: Array<{ itemStatus?: OrderStatus }> }) {
@@ -441,15 +452,10 @@ ordersRouter.post(
       .sort({ placedAt: 1, _id: 1 })
       .lean();
 
-    const scannedName = normalizeMatchText(body.recipientName);
     const scannedPhone = normalizedPhone(body.phone);
     const candidates = orders
       .map((order) => {
         const candidateName = order.recipientName || order.facebookName || order.customerName;
-        const orderNames = [order.recipientName, order.facebookName, order.customerName]
-          .filter((value): value is string => Boolean(value))
-          .map(normalizeMatchText);
-        const nameExact = orderNames.includes(scannedName);
         const candidateAddress = [
           order.addressDetail,
           order.wardName,
@@ -459,21 +465,26 @@ ordersRouter.post(
         ].filter(Boolean).join(" ");
         const candidatePhone = normalizedPhone(order.phone);
         const phoneExact = scannedPhone.length >= 9 && scannedPhone === candidatePhone;
+        const nameScore = nameSimilarity(body.recipientName, candidateName);
         const addressScore = tokenSimilarity(body.address, candidateAddress);
-        const score = Math.round(addressScore * 100);
-        const confidence = addressScore >= 0.7 ? "high" : addressScore >= 0.4 ? "medium" : "low";
+        const score = Math.min(100, Math.round((phoneExact ? 55 : 0) + nameScore * 35 + addressScore * 45));
+        const confidence = score >= 70 && (phoneExact || (nameScore >= 0.65 && addressScore >= 0.35))
+          ? "high"
+          : score >= 42
+            ? "medium"
+            : "low";
         return {
           order,
-          nameExact,
           score,
           confidence,
-          signals: { phoneExact, nameScore: 1, addressScore },
+          signals: { phoneExact, nameScore, addressScore },
           candidateName,
           candidateAddress,
         };
       })
-      .filter((candidate) => candidate.nameExact)
-      .sort((left, right) => Number(left.order.placedAt) - Number(right.order.placedAt))
+      .filter((candidate) => candidate.score >= 25)
+      .sort((left, right) => right.score - left.score || Number(left.order.placedAt) - Number(right.order.placedAt))
+      .slice(0, 8)
       .map(({ order, score, confidence, signals, candidateName, candidateAddress }) => ({
         order: {
           id: String(order._id),
@@ -494,7 +505,7 @@ ordersRouter.post(
     res.json({
       scan: body,
       candidates,
-      recommendedOrderId: null,
+      recommendedOrderId: candidates[0]?.confidence === "high" ? candidates[0].order.id : null,
     });
   }),
 );
