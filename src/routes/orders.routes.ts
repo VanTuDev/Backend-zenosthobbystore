@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import { Router } from "express";
-import rateLimit from "express-rate-limit";
+import { rateLimit } from "../lib/rate-limit";
 import { Types } from "mongoose";
 import { z } from "zod";
 import { attachUser, requireAdmin, requireAuth } from "../middleware/auth";

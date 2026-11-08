@@ -1,5 +1,5 @@
 import { Router } from "express";
-import rateLimit from "express-rate-limit";
+import { rateLimit } from "../lib/rate-limit";
 import { z } from "zod";
 import { attachUser, requireAdmin } from "../middleware/auth";
 import { requireDb } from "../middleware/require-db";

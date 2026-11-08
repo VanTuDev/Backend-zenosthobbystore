@@ -5,3 +5,6 @@ dist
 .env.production
 .env.*.local
 *.log
+
+.dev.vars
+.wrangler

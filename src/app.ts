@@ -2,7 +2,7 @@ import compression from "compression";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
-import rateLimit from "express-rate-limit";
+import { rateLimit } from "./lib/rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./config/env";
@@ -28,7 +28,17 @@ import { usersRouter } from "./routes/users.routes";
 const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 600, standardHeaders: true, legacyHeaders: false });
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
 
-export function createApp() {
+export type CreateAppOptions = {
+  /**
+   * HTTP access log via morgan. Off on Cloudflare Workers: morgan compiles its format with
+   * `new Function`, which workerd forbids, and Workers already logs every request itself.
+   */
+  requestLogger?: boolean;
+  /** App-level gzip. Off on Workers: Cloudflare already compresses at the edge. */
+  compress?: boolean;
+};
+
+export function createApp({ requestLogger = true, compress = true }: CreateAppOptions = {}) {
   const app = express();
 
   app.set("trust proxy", 1);
@@ -44,8 +54,8 @@ export function createApp() {
       credentials: true,
     }),
   );
-  app.use(compression());
-  if (env.nodeEnv !== "test") app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
+  if (compress) app.use(compression());
+  if (requestLogger && env.nodeEnv !== "test") app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
   app.use(globalLimiter);

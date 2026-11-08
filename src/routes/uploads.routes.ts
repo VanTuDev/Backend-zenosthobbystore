@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import rateLimit from "express-rate-limit";
+import { rateLimit } from "../lib/rate-limit";
 import { attachUser, requireAdmin } from "../middleware/auth";
 import { requireCloudinary } from "../middleware/require-cloudinary";
 import { deleteImage, uploadImageBuffer } from "../lib/cloudinary";

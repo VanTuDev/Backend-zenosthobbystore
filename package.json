@@ -12,6 +12,8 @@
     "seed:catalog": "tsx scripts/seed-demo-catalog.ts",
     "import:vn-locations": "tsx scripts/import-vn-locations.ts",
     "smoke": "tsx scripts/smoke-test.ts",
+    "cf:dev": "wrangler dev --local",
+    "cf:deploy": "wrangler deploy",
     "lint": "eslint src"
   },
   "dependencies": {
@@ -40,6 +42,7 @@
     "@types/node": "^22.10.5",
     "mongodb-memory-server": "^10.1.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "wrangler": "^4.158.0"
   }
 }
