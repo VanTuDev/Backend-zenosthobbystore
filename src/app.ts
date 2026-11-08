@@ -5,8 +5,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
-import { env, isCloudinaryConfigured, isGoogleOAuthConfigured, isMongoConfigured } from "./config/env";
-import { isDbConnected } from "./lib/db";
+import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler";
 import { authRouter } from "./routes/auth.routes";
 import { categoriesRouter } from "./routes/categories.routes";
@@ -15,6 +14,7 @@ import { customersRouter } from "./routes/customers.routes";
 import { financeRouter } from "./routes/finance.routes";
 import { favoritesRouter } from "./routes/favorites.routes";
 import { foldersRouter } from "./routes/folders.routes";
+import { healthRouter } from "./routes/health.routes";
 import { locationsRouter } from "./routes/locations.routes";
 import { ordersRouter } from "./routes/orders.routes";
 import { paymentsRouter } from "./routes/payments.routes";
@@ -50,15 +50,7 @@ export function createApp() {
   app.use(cookieParser());
   app.use(globalLimiter);
 
-  app.get("/health", (_req, res) => {
-    res.json({
-      ok: true,
-      googleOAuthConfigured: isGoogleOAuthConfigured,
-      mongoConfigured: isMongoConfigured,
-      dbConnected: isDbConnected(),
-      cloudinaryConfigured: isCloudinaryConfigured,
-    });
-  });
+  app.use(healthRouter);
 
   app.use("/auth", authLimiter, authRouter);
   app.use("/products", productsRouter);
