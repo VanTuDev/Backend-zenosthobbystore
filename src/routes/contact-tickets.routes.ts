@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { rateLimit } from "../lib/rate-limit";
 import { z } from "zod";
+import { env } from "../config/env";
 import { attachUser, requireAdmin } from "../middleware/auth";
 import { requireDb } from "../middleware/require-db";
 import { ContactTicket } from "../models/contact-ticket.model";
@@ -13,7 +14,7 @@ contactTicketsRouter.use(requireDb);
 
 // The submit endpoint is public (no login needed to ask for support) — a tighter limiter than the
 // global one keeps it from being abused as an anonymous mail-bomb/spam vector.
-const submitLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
+const submitLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false, skip: () => env.nodeEnv !== "production" });
 
 const ticketSchema = z.object({
   subject: z.enum(["order", "return_warranty", "product", "payment", "other"]),

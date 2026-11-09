@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { rateLimit } from "../lib/rate-limit";
+import { env } from "../config/env";
 import { attachUser, requireAdmin } from "../middleware/auth";
 import { requireCloudinary } from "../middleware/require-cloudinary";
 import { deleteImage, uploadImageBuffer } from "../lib/cloudinary";
@@ -21,7 +22,7 @@ const upload = multer({
 });
 
 // Public, unauthenticated upload route — tighter limiter than the global one to deter abuse.
-const contactImageLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const contactImageLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, skip: () => env.nodeEnv !== "production" });
 
 /** Admin-only: upload a product image, returns the Cloudinary URL + public ID to store on the product. */
 uploadsRouter.post(

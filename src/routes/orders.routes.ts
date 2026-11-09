@@ -3,6 +3,7 @@ import { Router } from "express";
 import { rateLimit } from "../lib/rate-limit";
 import { Types } from "mongoose";
 import { z } from "zod";
+import { env } from "../config/env";
 import { attachUser, requireAdmin, requireAuth } from "../middleware/auth";
 import { requireDb } from "../middleware/require-db";
 import { FinanceTransaction } from "../models/finance-transaction.model";
@@ -119,6 +120,7 @@ const publicShippingDetailsLimiter = rateLimit({
   limit: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: () => env.nodeEnv !== "production",
 });
 
 const itemStatusSchema = z.object({ status: z.enum(ALL_STATUSES) });

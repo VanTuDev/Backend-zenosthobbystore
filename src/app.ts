@@ -25,8 +25,9 @@ import { usersRouter } from "./routes/users.routes";
 
 // Generous global ceiling; auth gets a tighter one below since login endpoints
 // are the highest-value target for brute-forcing/credential stuffing.
-const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 600, standardHeaders: true, legacyHeaders: false });
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const skipRateLimitOutsideProduction = () => env.nodeEnv !== "production";
+const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 600, standardHeaders: true, legacyHeaders: false, skip: skipRateLimitOutsideProduction });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, skip: skipRateLimitOutsideProduction });
 
 export type CreateAppOptions = {
   /**
