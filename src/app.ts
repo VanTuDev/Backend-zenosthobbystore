@@ -5,7 +5,7 @@ import express from "express";
 import { rateLimit } from "./lib/rate-limit";
 import helmet from "helmet";
 import morgan from "morgan";
-import { env } from "./config/env";
+import { env, isCorsOriginAllowed } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/error-handler";
 import { authRouter } from "./routes/auth.routes";
 import { categoriesRouter } from "./routes/categories.routes";
@@ -46,13 +46,17 @@ export function createApp({ requestLogger = true, compress = true }: CreateAppOp
   app.use(helmet());
   app.use(
     cors({
-      // Function form (not the plain string the `cors` package also accepts) so more than one
-      // origin can be allowed — see env.corsOrigins in config/env.ts.
-      origin: (origin, callback) => {
-        if (!origin || env.corsOrigins.includes(origin)) return callback(null, true);
-        callback(new Error(`Origin "${origin}" not allowed by CORS`));
-      },
+      // Function form so several origins (apex, www, Vercel previews) can be allowed — see
+      // isCorsOriginAllowed in config/env.ts. Requests without an Origin header (server-to-server,
+      // curl, health checks) pass. A disallowed browser origin simply gets no CORS headers, so the
+      // browser blocks it; we don't turn it into a 500.
+      origin: (origin, callback) => callback(null, !origin || isCorsOriginAllowed(origin)),
       credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+      // Cache preflights for a day so the browser doesn't re-ask before every API call.
+      maxAge: 86400,
+      optionsSuccessStatus: 204,
     }),
   );
   if (compress) app.use(compression());

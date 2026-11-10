@@ -27,8 +27,9 @@ async function closeDb() {
   if (mongoose.connection.readyState !== 0) await mongoose.disconnect().catch(() => undefined);
 }
 
-const withDb: express.RequestHandler = async (_req, res, next) => {
-  if (!isMongoConfigured) return next();
+const withDb: express.RequestHandler = async (req, res, next) => {
+  // CORS preflights and the liveness probe never touch MongoDB — skip the (slow) per-request connect.
+  if (!isMongoConfigured || req.method === "OPTIONS" || req.path === "/health") return next();
   try {
     while (lockedSince && Date.now() - lockedSince < LOCK_STALE_MS) await sleep(15);
     const myLock = Date.now();

@@ -40,8 +40,26 @@ const raw = parsed.data;
 // Supports a single origin or a comma-separated list (e.g. the apex domain + the Vercel preview
 // domain both serving the same frontend) — the cors package's string form only ever matches one.
 const corsOrigins = raw.CORS_ORIGIN.split(",")
-  .map((origin) => origin.trim())
+  .map((origin) => origin.trim().replace(/\/+$/, ""))
   .filter(Boolean);
+
+// An entry may contain `*` to match one DNS label's worth of [a-z0-9-] characters, e.g.
+// "https://zenosthobbystore-*-vantudevs-projects.vercel.app" for Vercel preview deployments.
+// Everything else is matched literally (no regex injection from the env value).
+const corsMatchers: Array<(origin: string) => boolean> = corsOrigins.map((entry) => {
+  if (!entry.includes("*")) return (origin) => origin === entry;
+  const pattern = entry
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[a-z0-9-]+");
+  const regex = new RegExp(`^${pattern}$`, "i");
+  return (origin) => regex.test(origin);
+});
+
+/** True when a browser Origin header is on the CORS_ORIGIN allowlist (exact or `*` pattern). */
+export function isCorsOriginAllowed(origin: string): boolean {
+  return corsMatchers.some((matches) => matches(origin));
+}
 
 export const env = {
   nodeEnv: raw.NODE_ENV,
