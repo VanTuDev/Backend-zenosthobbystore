@@ -37,6 +37,7 @@ const productVideoSchema = z.object({
 });
 
 const productVariantSchema = z.object({
+  manufacturer: z.string().trim().max(120).default(""),
   name: z.string().min(1),
   price: z.number().int().positive("Giá biến thể phải lớn hơn 0."),
   stockCount: z.number().int().nonnegative().default(0),
@@ -44,6 +45,7 @@ const productVariantSchema = z.object({
 });
 
 const productSchema = z.object({
+  manufacturerReviews: z.array(z.object({ manufacturer: z.string().trim().min(1).max(120), review: z.string().trim().max(2000) })).max(100).default([]),
   name: z.string().min(1),
   slug: z.string().min(1).optional(),
   brand: z.string().default(""),

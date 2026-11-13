@@ -19,6 +19,7 @@ export interface ProductVideo {
 }
 
 export interface ProductVariant {
+  manufacturer?: string;
   /** e.g. "Đỏ - Size M" — free-text, no separate color/size axes. */
   name: string;
   price: number;
@@ -28,6 +29,7 @@ export interface ProductVariant {
 }
 
 export interface ProductDoc {
+  manufacturerReviews?: { manufacturer: string; review: string }[];
   name: string;
   slug: string;
   brand: string;
@@ -73,6 +75,7 @@ const videoSchema = new Schema<ProductVideo>(
 
 const variantSchema = new Schema<ProductVariant>(
   {
+    manufacturer: { type: String, default: "", trim: true, maxlength: 120 },
     name: { type: String, required: true },
     price: { type: Number, required: true, min: 0 },
     stockCount: { type: Number, default: 0, min: 0 },
@@ -83,6 +86,7 @@ const variantSchema = new Schema<ProductVariant>(
 
 const productSchema = new Schema<ProductDoc>(
   {
+    manufacturerReviews: { type: [new Schema({ manufacturer: { type: String, required: true, trim: true, maxlength: 120 }, review: { type: String, default: "", maxlength: 2000 } }, { _id: false })], default: [] },
     name: { type: String, required: true },
     slug: { type: String, required: true, unique: true },
     brand: { type: String, default: "" },
